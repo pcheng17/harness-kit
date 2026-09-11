@@ -7,5 +7,4 @@ tools = ["read", "grep", "find", "bash", "edit"]
 color = "purple"
 
 [pi]
-thinking = "max"
 provider = "codex"

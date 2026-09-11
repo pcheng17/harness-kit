@@ -67,6 +67,14 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertIn("noop", second.stdout)
 
+    def test_pi_agents_default_to_medium_thinking(self) -> None:
+        result = invoke(self.path, "apply", "--harness", "pi")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        generated_agents = sorted((ROOT / ".generated/pi/agents").glob("*.md"))
+        self.assertEqual(len(generated_agents), 5)
+        for agent in generated_agents:
+            self.assertIn("thinking: medium\n", agent.read_text(), agent)
+
     def test_scoped_apply_preserves_other_harness_links(self) -> None:
         first = invoke(self.path, "apply")
         self.assertEqual(first.returncode, 0, first.stderr)

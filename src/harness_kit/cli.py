@@ -137,10 +137,10 @@ def render(policy: dict[str, Any], agents: list[Agent]) -> dict[Path, str]:
             f"tools: {', '.join(policy['tools']['pi'][tool] for tool in agent.tools)}",
             f"model: {policy['models']['pi'][provider][agent.tier]}",
         ]
-        for field in ("thinking", "isolated"):
-            if field in agent.pi:
-                value = str(agent.pi[field]).lower() if isinstance(agent.pi[field], bool) else agent.pi[field]
-                pi.append(f"{field}: {value}")
+        pi.append(f"thinking: {agent.pi.get('thinking', 'medium')}")
+        if "isolated" in agent.pi:
+            value = str(agent.pi["isolated"]).lower() if isinstance(agent.pi["isolated"], bool) else agent.pi["isolated"]
+            pi.append(f"isolated: {value}")
         pi.extend(["---", "", agent.prompt.rstrip(), ""])
         files[GENERATED / "pi/agents" / f"{agent.name}.md"] = "\n".join(pi)
     return files

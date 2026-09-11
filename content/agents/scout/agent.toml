@@ -7,6 +7,5 @@ tools = ["read", "grep", "find"]
 color = "cyan"
 
 [pi]
-thinking = "low"
 isolated = true
 provider = "codex"
