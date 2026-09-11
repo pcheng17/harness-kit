@@ -138,6 +138,21 @@ class HarnessKitTests(unittest.TestCase):
                     self.assertEqual(foreign.read_text(), "foreign\n")
                     self.assertFalse((path / "commands").exists())
 
+    def test_install_skip_unblocks_other_destinations(self) -> None:
+        destination = self.path / "home/.claude/CLAUDE.md"
+        destination.parent.mkdir(parents=True)
+        foreign = self.path / "dotfiles/CLAUDE.md"
+        foreign.parent.mkdir(parents=True)
+        foreign.write_text("foreign\n")
+        destination.symlink_to(foreign)
+        result = invoke(self.path, "install", "--harness", "claude", "--skip", str(destination))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("skip", result.stdout)
+        self.assertEqual(destination.resolve(), foreign)
+        self.assertTrue((self.path / "home/.claude/agents/scout.md").is_symlink())
+        state = json.loads((self.path / "state/harness-kit/state.json").read_text())
+        self.assertNotIn(str(destination.resolve()), state["links"])
+
     def test_install_adopts_known_legacy_pi_instruction_link(self) -> None:
         destination = self.path / "home/.pi/agent/AGENTS.md"
         destination.parent.mkdir(parents=True)

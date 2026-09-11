@@ -237,13 +237,21 @@ def selected_destination(path: Path, harness: str) -> bool:
     return any(path.is_relative_to(root) for root in roots)
 
 
-def preview(harness: str, agents: list[Agent], adopt_legacy: bool = False) -> tuple[list[Operation], dict[str, str]]:
+def preview(
+    harness: str,
+    agents: list[Agent],
+    adopt_legacy: bool = False,
+    skip: frozenset[Path] = frozenset(),
+) -> tuple[list[Operation], dict[str, str]]:
     state = load_state()
     desired = desired_links(harness, agents)
     desired_by_destination = {str(link.destination): link for link in desired}
     operations: list[Operation] = []
     for link in desired:
         destination = str(link.destination)
+        if link.destination.absolute() in skip:
+            operations.append(Operation("skip", link, "explicitly skipped"))
+            continue
         current = link_target(link.destination)
         if not link.destination.exists() and not link.destination.is_symlink():
             operations.append(Operation("create", link))
@@ -306,10 +314,10 @@ def run(command: list[str]) -> None:
         raise KitError(f"external command failed ({error.returncode}): {' '.join(command)}") from error
 
 
-def install(harness: str, dry_run: bool, adopt_legacy: bool) -> int:
+def install(harness: str, dry_run: bool, adopt_legacy: bool, skip: frozenset[Path] = frozenset()) -> int:
     policy, agents = load_catalog()
     files = render(policy, agents)
-    operations, next_state = preview(harness, agents, adopt_legacy)
+    operations, next_state = preview(harness, agents, adopt_legacy, skip)
     print_plan(operations)
     conflicts = [operation for operation in operations if operation.action == "conflict"]
     if conflicts:
@@ -370,6 +378,12 @@ def main(argv: list[str] | None = None) -> int:
         if command == "install":
             item.add_argument("--dry-run", action="store_true")
             item.add_argument("--adopt-legacy", action="store_true", help="adopt recognized links from the old skills or pi-kit checkouts")
+            item.add_argument(
+                "--skip",
+                action="append",
+                metavar="PATH",
+                help="leave this destination unmanaged instead of treating it as a blocking conflict (repeatable)",
+            )
     args = parser.parse_args(argv)
     try:
         policy, agents = load_catalog()
@@ -381,7 +395,8 @@ def main(argv: list[str] | None = None) -> int:
             print_plan(operations)
             return 2 if any(operation.action == "conflict" for operation in operations) else 0
         if args.command == "install":
-            return install(args.harness, args.dry_run, args.adopt_legacy)
+            skip = frozenset(Path(value).expanduser().absolute() for value in args.skip or ())
+            return install(args.harness, args.dry_run, args.adopt_legacy, skip)
         return check(args.harness)
     except KitError as error:
         print(f"harness-kit: {error}", file=sys.stderr)
