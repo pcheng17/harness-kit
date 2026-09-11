@@ -1,0 +1,11 @@
+name = "scout"
+description = "Finds files, symbols, call sites, and references; reports locations instead of dumping whole files"
+model_tier = "standard"
+tools = ["read", "grep", "find"]
+
+[claude]
+color = "cyan"
+
+[pi]
+isolated = true
+provider = "codex"

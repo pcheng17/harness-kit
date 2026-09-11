@@ -1,0 +1,33 @@
+[models.claude]
+fast = "haiku"
+standard = "sonnet"
+strong = "opus"
+frontier = "fable"
+
+[models.pi.codex]
+fast = "openai-codex/gpt-5.6-luna"
+standard = "openai-codex/gpt-5.6-terra"
+strong = "openai-codex/gpt-5.6-sol"
+frontier = "openai-codex/gpt-6-astra"
+
+[models.pi.anthropic]
+fast = "anthropic/claude-haiku-4-5"
+standard = "anthropic/claude-sonnet-5"
+strong = "anthropic/claude-opus-5"
+frontier = "anthropic/claude-fable-5-1"
+
+[tools.claude]
+read = "Read"
+grep = "Grep"
+find = "Glob"
+bash = "Bash"
+edit = "Edit"
+write = "Write"
+
+[tools.pi]
+read = "read"
+grep = "grep"
+find = "find"
+bash = "bash"
+edit = "edit"
+write = "write"

@@ -1,0 +1,10 @@
+name = "refuter"
+description = "Reviews the builder's work, checks the diff, and reruns tests independently - never trusts a bare done claim"
+model_tier = "strong"
+tools = ["read", "grep", "find", "bash"]
+
+[claude]
+color = "red"
+
+[pi]
+provider = "codex"
