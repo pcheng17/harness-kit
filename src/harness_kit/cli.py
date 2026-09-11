@@ -16,6 +16,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 GENERATED = ROOT / ".generated"
 COMMON_INSTRUCTIONS = ROOT / "content/instructions/AGENTS.md"
+COMPONENTS = frozenset(("skills", "agents", "instructions"))
 
 
 class KitError(RuntimeError):
@@ -79,7 +80,12 @@ def load_toml(path: Path) -> dict[str, Any]:
         raise KitError(f"cannot read {path}: {error}") from error
 
 
-def load_catalog() -> tuple[dict[str, Any], list[Agent]]:
+def load_catalog(harness: str, components: frozenset[str]) -> tuple[dict[str, Any], list[Agent]]:
+    if "instructions" in components and not COMMON_INSTRUCTIONS.is_file():
+        raise KitError(f"missing common instructions: {COMMON_INSTRUCTIONS}")
+    if "agents" not in components:
+        return {}, []
+
     policy = load_toml(ROOT / "policy.toml")
     agents: list[Agent] = []
     names: set[str] = set()
@@ -98,80 +104,101 @@ def load_catalog() -> tuple[dict[str, Any], list[Agent]]:
         names.add(name)
         tier = data["model_tier"]
         tools = data["tools"]
-        if not isinstance(tier, str) or not isinstance(tools, list) or not all(isinstance(tool, str) for tool in tools):
-            raise KitError(f"{metadata_path}: invalid model_tier or tools")
+        if not isinstance(data["description"], str) or not isinstance(tier, str) or not isinstance(tools, list) or not all(isinstance(tool, str) for tool in tools):
+            raise KitError(f"{metadata_path}: invalid description, model_tier, or tools")
         agents.append(Agent(name, data["description"], tier, tuple(tools), prompt_path.read_text(), data.get("claude", {}), data.get("pi", {})))
     if not agents:
         raise KitError("no agents found")
-    if not COMMON_INSTRUCTIONS.is_file():
-        raise KitError(f"missing common instructions: {COMMON_INSTRUCTIONS}")
-    validate_catalog(policy, agents)
+    validate_catalog(policy, agents, harness)
     return policy, agents
 
 
-def validate_catalog(policy: dict[str, Any], agents: list[Agent]) -> None:
+def validate_catalog(policy: dict[str, Any], agents: list[Agent], harness: str) -> None:
     try:
-        claude_models = policy["models"]["claude"]
-        pi_models = policy["models"]["pi"]
-        claude_tools = policy["tools"]["claude"]
-        pi_tools = policy["tools"]["pi"]
+        models = policy["models"]
+        tools_by_harness = policy["tools"]
     except KeyError as error:
         raise KitError(f"policy.toml missing {error}") from error
     for agent in agents:
-        if agent.tier not in claude_models:
-            raise KitError(f"{agent.name}: unknown model tier {agent.tier!r} for Claude")
-        provider = agent.pi.get("provider", "codex")
-        if provider not in pi_models or agent.tier not in pi_models[provider]:
-            raise KitError(f"{agent.name}: unknown Pi provider/tier {provider!r}/{agent.tier!r}")
-        for tool in agent.tools:
-            if tool not in claude_tools or tool not in pi_tools:
-                raise KitError(f"{agent.name}: unknown tool capability {tool!r}")
-        if not isinstance(agent.claude, dict) or not isinstance(agent.pi, dict):
-            raise KitError(f"{agent.name}: harness metadata must be tables")
+        if harness in ("all", "claude"):
+            if not isinstance(agent.claude, dict):
+                raise KitError(f"{agent.name}: Claude metadata must be a table")
+            try:
+                claude_models = models["claude"]
+                claude_tools = tools_by_harness["claude"]
+            except KeyError as error:
+                raise KitError(f"policy.toml missing {error}") from error
+            if agent.tier not in claude_models:
+                raise KitError(f"{agent.name}: unknown model tier {agent.tier!r} for Claude")
+            for tool in agent.tools:
+                if tool not in claude_tools:
+                    raise KitError(f"{agent.name}: unknown tool capability {tool!r} for Claude")
+        if harness in ("all", "pi"):
+            if not isinstance(agent.pi, dict):
+                raise KitError(f"{agent.name}: Pi metadata must be a table")
+            try:
+                pi_models = models["pi"]
+                pi_tools = tools_by_harness["pi"]
+            except KeyError as error:
+                raise KitError(f"policy.toml missing {error}") from error
+            provider = agent.pi.get("provider", "codex")
+            if provider not in pi_models or agent.tier not in pi_models[provider]:
+                raise KitError(f"{agent.name}: unknown Pi provider/tier {provider!r}/{agent.tier!r}")
+            for tool in agent.tools:
+                if tool not in pi_tools:
+                    raise KitError(f"{agent.name}: unknown tool capability {tool!r} for Pi")
 
 
-def render(policy: dict[str, Any], agents: list[Agent]) -> dict[Path, str]:
+def render(policy: dict[str, Any], agents: list[Agent], harness: str) -> dict[Path, str]:
     files: dict[Path, str] = {}
     for agent in agents:
-        claude = [
-            "---", f"name: {agent.name}", f"description: {agent.description}",
-            f"tools: {', '.join(policy['tools']['claude'][tool] for tool in agent.tools)}",
-            f"model: {policy['models']['claude'][agent.tier]}",
-        ]
-        if color := agent.claude.get("color"):
-            claude.append(f"color: {color}")
-        claude.extend(["---", "", agent.prompt.rstrip(), ""])
-        files[GENERATED / "claude/agents" / f"{agent.name}.md"] = "\n".join(claude)
-
-        provider = agent.pi.get("provider", "codex")
-        pi = [
-            "---", f"name: {agent.name}", f"description: {agent.description}",
-            f"tools: {', '.join(policy['tools']['pi'][tool] for tool in agent.tools)}",
-            f"model: {policy['models']['pi'][provider][agent.tier]}",
-        ]
-        pi.append(f"thinking: {agent.pi.get('thinking', 'medium')}")
-        if "isolated" in agent.pi:
-            value = str(agent.pi["isolated"]).lower() if isinstance(agent.pi["isolated"], bool) else agent.pi["isolated"]
-            pi.append(f"isolated: {value}")
-        pi.extend(["---", "", agent.prompt.rstrip(), ""])
-        files[GENERATED / "pi/agents" / f"{agent.name}.md"] = "\n".join(pi)
+        if harness in ("all", "claude"):
+            claude = [
+                "---", f"name: {agent.name}", f"description: {agent.description}",
+                f"tools: {', '.join(policy['tools']['claude'][tool] for tool in agent.tools)}",
+                f"model: {policy['models']['claude'][agent.tier]}",
+            ]
+            if color := agent.claude.get("color"):
+                claude.append(f"color: {color}")
+            claude.extend(["---", "", agent.prompt.rstrip(), ""])
+            files[GENERATED / "claude/agents" / f"{agent.name}.md"] = "\n".join(claude)
+        if harness in ("all", "pi"):
+            provider = agent.pi.get("provider", "codex")
+            pi = [
+                "---", f"name: {agent.name}", f"description: {agent.description}",
+                f"tools: {', '.join(policy['tools']['pi'][tool] for tool in agent.tools)}",
+                f"model: {policy['models']['pi'][provider][agent.tier]}",
+            ]
+            pi.append(f"thinking: {agent.pi.get('thinking', 'medium')}")
+            if "isolated" in agent.pi:
+                value = str(agent.pi["isolated"]).lower() if isinstance(agent.pi["isolated"], bool) else agent.pi["isolated"]
+                pi.append(f"isolated: {value}")
+            pi.extend(["---", "", agent.prompt.rstrip(), ""])
+            files[GENERATED / "pi/agents" / f"{agent.name}.md"] = "\n".join(pi)
     return files
 
 
-def materialize(files: dict[Path, str]) -> None:
-    temporary = Path(tempfile.mkdtemp(prefix="harness-kit-", dir=ROOT))
-    try:
-        for destination, content in files.items():
-            relative = destination.relative_to(GENERATED)
-            output = temporary / relative
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(content)
-        if GENERATED.exists():
-            shutil.rmtree(GENERATED)
-        temporary.rename(GENERATED)
-    except Exception:
-        shutil.rmtree(temporary, ignore_errors=True)
-        raise
+def materialize(files: dict[Path, str], harness: str) -> None:
+    for selected in ("claude", "pi"):
+        if harness not in ("all", selected):
+            continue
+        destination = GENERATED / selected
+        temporary_root = Path(tempfile.mkdtemp(prefix="harness-kit-", dir=ROOT))
+        temporary = temporary_root / selected
+        try:
+            temporary.mkdir()
+            for output, content in files.items():
+                if output.is_relative_to(destination):
+                    relative = output.relative_to(destination)
+                    generated = temporary / relative
+                    generated.parent.mkdir(parents=True, exist_ok=True)
+                    generated.write_text(content)
+            if destination.exists():
+                shutil.rmtree(destination)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary.rename(destination)
+        finally:
+            shutil.rmtree(temporary_root, ignore_errors=True)
 
 
 def load_state() -> dict[str, str]:
@@ -188,25 +215,30 @@ def load_state() -> dict[str, str]:
         raise KitError(f"invalid ownership state {path}: {error}") from error
 
 
-def desired_links(harness: str, agents: list[Agent]) -> list[Link]:
+def desired_links(harness: str, agents: list[Agent], components: frozenset[str]) -> list[Link]:
     user_home = home()
     links: list[Link] = []
     if harness in ("all", "claude"):
-        links.append(Link(user_home / ".claude/CLAUDE.md", COMMON_INSTRUCTIONS, "common-instructions"))
-        for agent in agents:
-            agent_file = GENERATED / "claude/agents" / f"{agent.name}.md"
-            links.append(Link(user_home / ".claude/agents" / agent_file.name, agent_file, "claude-agent"))
-        for skill in sorted((ROOT / "content/skills").iterdir()):
-            if skill.is_dir() and (skill / "SKILL.md").is_file():
-                links.append(Link(user_home / ".claude/skills" / skill.name, skill, "claude-skill"))
+        if "instructions" in components:
+            links.append(Link(user_home / ".claude/CLAUDE.md", COMMON_INSTRUCTIONS, "common-instructions"))
+        if "agents" in components:
+            for agent in agents:
+                agent_file = GENERATED / "claude/agents" / f"{agent.name}.md"
+                links.append(Link(user_home / ".claude/agents" / agent_file.name, agent_file, "claude-agent"))
+        if "skills" in components:
+            for skill in sorted((ROOT / "content/skills").iterdir()):
+                if skill.is_dir() and (skill / "SKILL.md").is_file():
+                    links.append(Link(user_home / ".claude/skills" / skill.name, skill, "claude-skill"))
     if harness in ("all", "pi"):
-        links.extend((
-            Link(user_home / ".agents/AGENTS.md", COMMON_INSTRUCTIONS, "common-instructions"),
-            Link(user_home / ".pi/agent/AGENTS.md", COMMON_INSTRUCTIONS, "common-instructions"),
-        ))
-        for skill in sorted((ROOT / "content/skills").iterdir()):
-            if skill.is_dir() and (skill / "SKILL.md").is_file():
-                links.append(Link(user_home / ".agents/skills" / skill.name, skill, "shared-skill"))
+        if "instructions" in components:
+            links.extend((
+                Link(user_home / ".agents/AGENTS.md", COMMON_INSTRUCTIONS, "common-instructions"),
+                Link(user_home / ".pi/agent/AGENTS.md", COMMON_INSTRUCTIONS, "common-instructions"),
+            ))
+        if "skills" in components:
+            for skill in sorted((ROOT / "content/skills").iterdir()):
+                if skill.is_dir() and (skill / "SKILL.md").is_file():
+                    links.append(Link(user_home / ".agents/skills" / skill.name, skill, "shared-skill"))
     return links
 
 
@@ -226,25 +258,42 @@ def is_legacy_target(link: Link, current: Path | None) -> bool:
     return False
 
 
-def selected_destination(path: Path, harness: str) -> bool:
+def selected_destination(path: Path, harness: str, components: frozenset[str]) -> bool:
     # Do not resolve this path: a deployed symlink resolves outside its harness root.
     path = path.absolute()
-    roots: list[Path] = []
-    if harness in ("all", "claude"):
-        roots.append((home() / ".claude").absolute())
-    if harness in ("all", "pi"):
-        roots.extend(((home() / ".pi").absolute(), (home() / ".agents").absolute()))
-    return any(path.is_relative_to(root) for root in roots)
+    if components == COMPONENTS:
+        roots: list[Path] = []
+        if harness in ("all", "claude"):
+            roots.append((home() / ".claude").absolute())
+        if harness in ("all", "pi"):
+            roots.extend(((home() / ".pi").absolute(), (home() / ".agents").absolute()))
+        return any(path.is_relative_to(root) for root in roots)
+    user_home = home()
+    selected: list[Path] = []
+    if "skills" in components:
+        if harness in ("all", "claude"):
+            selected.append(user_home / ".claude/skills")
+        if harness in ("all", "pi"):
+            selected.append(user_home / ".agents/skills")
+    if "agents" in components and harness in ("all", "claude"):
+        selected.append(user_home / ".claude/agents")
+    if "instructions" in components:
+        if harness in ("all", "claude"):
+            selected.append(user_home / ".claude/CLAUDE.md")
+        if harness in ("all", "pi"):
+            selected.extend((user_home / ".agents/AGENTS.md", user_home / ".pi/agent/AGENTS.md"))
+    return any(path == destination.absolute() or path.is_relative_to(destination.absolute()) for destination in selected)
 
 
 def preview(
     harness: str,
     agents: list[Agent],
+    components: frozenset[str] = COMPONENTS,
     adopt_legacy: bool = False,
     skip: frozenset[Path] = frozenset(),
 ) -> tuple[list[Operation], dict[str, str]]:
     state = load_state()
-    desired = desired_links(harness, agents)
+    desired = desired_links(harness, agents, components)
     desired_by_destination = {str(link.destination): link for link in desired}
     operations: list[Operation] = []
     for link in desired:
@@ -265,7 +314,7 @@ def preview(
             operations.append(Operation("conflict", link, "unmanaged destination"))
     next_state = dict(state)
     for destination, old_target in state.items():
-        if destination in desired_by_destination or not selected_destination(Path(destination), harness):
+        if destination in desired_by_destination or not selected_destination(Path(destination), harness, components):
             continue
         path = Path(destination)
         next_state.pop(destination, None)
@@ -282,14 +331,39 @@ def preview(
     return operations, next_state
 
 
+def agent_execution_plan(harness: str, components: frozenset[str], adopt_legacy: bool = False) -> list[Operation]:
+    if harness not in ("all", "pi") or "agents" not in components:
+        return []
+    operations = [
+        Operation("render", Link(GENERATED / "pi/agents", ROOT / "content/agents", "generated-agents"), "render Pi agents"),
+        Operation("npm ci", Link(ROOT / "node_modules", ROOT / "package-lock.json", "npm-dependencies"), "install npm dependencies"),
+    ]
+    if legacy_pi_package_registered():
+        if adopt_legacy:
+            operations.append(Operation("pi remove", Link(home() / ".pi/agent/settings.json", legacy_pi_package(), "legacy-pi-package"), "remove legacy Pi package"))
+        else:
+            operations.append(Operation("conflict", Link(home() / ".pi/agent/settings.json", legacy_pi_package(), "legacy-pi-package"), "legacy pi-kit package is registered; rerun with --adopt-legacy"))
+    operations.append(Operation("pi install", Link(home() / ".pi/agent/settings.json", ROOT, "pi-package"), "register Pi package"))
+    return operations
+
+
 def print_plan(operations: list[Operation]) -> None:
     for operation in operations:
         suffix = f" ({operation.detail})" if operation.detail else ""
-        print(f"{operation.action:8} {operation.link.destination} -> {operation.link.target}{suffix}")
+        print(f"{operation.action:10} {operation.link.destination} -> {operation.link.target}{suffix}")
 
 
-def verify_generated(files: dict[Path, str]) -> bool:
-    return all(path.is_file() and path.read_text() == content for path, content in files.items()) and len(list(GENERATED.glob("**/*.md"))) == len(files)
+def verify_generated(files: dict[Path, str], harness: str) -> bool:
+    if not all(path.is_file() and path.read_text() == content for path, content in files.items()):
+        return False
+    for selected in ("claude", "pi"):
+        if harness in ("all", selected):
+            root = GENERATED / selected
+            expected = {path for path in files if path.is_relative_to(root)}
+            actual = set(root.glob("**/*.md"))
+            if actual != expected:
+                return False
+    return True
 
 
 def legacy_pi_package_registered() -> bool:
@@ -314,20 +388,22 @@ def run(command: list[str]) -> None:
         raise KitError(f"external command failed ({error.returncode}): {' '.join(command)}") from error
 
 
-def install(harness: str, dry_run: bool, adopt_legacy: bool, skip: frozenset[Path] = frozenset()) -> int:
-    policy, agents = load_catalog()
-    files = render(policy, agents)
-    operations, next_state = preview(harness, agents, adopt_legacy, skip)
+def install(harness: str, components: frozenset[str], dry_run: bool, adopt_legacy: bool, skip: frozenset[Path] = frozenset()) -> int:
+    policy, agents = load_catalog(harness, components)
+    files = render(policy, agents, harness) if agents else {}
+    operations, next_state = preview(harness, agents, components, adopt_legacy, skip)
+    operations.extend(agent_execution_plan(harness, components, adopt_legacy))
     print_plan(operations)
     conflicts = [operation for operation in operations if operation.action == "conflict"]
     if conflicts:
         raise KitError("refusing to overwrite unmanaged destinations")
     if dry_run:
         return 0
-    if harness in ("all", "pi") and legacy_pi_package_registered() and not adopt_legacy:
+    if harness in ("all", "pi") and "agents" in components and legacy_pi_package_registered() and not adopt_legacy:
         raise KitError("legacy pi-kit package is registered; rerun with --adopt-legacy to replace it")
-    materialize(files)
-    if harness in ("all", "pi"):
+    if "agents" in components:
+        materialize(files, harness)
+    if harness in ("all", "pi") and "agents" in components:
         run(["npm", "ci"])
         if legacy_pi_package_registered():
             run(["pi", "remove", str(legacy_pi_package())])
@@ -349,12 +425,12 @@ def install(harness: str, dry_run: bool, adopt_legacy: bool, skip: frozenset[Pat
     return 0
 
 
-def check(harness: str) -> int:
-    policy, agents = load_catalog()
-    files = render(policy, agents)
-    operations, _ = preview(harness, agents)
-    drift = not verify_generated(files) or any(operation.action != "noop" for operation in operations)
-    if harness in ("all", "pi"):
+def check(harness: str, components: frozenset[str]) -> int:
+    policy, agents = load_catalog(harness, components)
+    files = render(policy, agents, harness) if agents else {}
+    operations, _ = preview(harness, agents, components)
+    drift = ("agents" in components and not verify_generated(files, harness)) or any(operation.action != "noop" for operation in operations)
+    if harness in ("all", "pi") and "agents" in components:
         settings = home() / ".pi/agent/settings.json"
         try:
             installed = str(ROOT) in json.loads(settings.read_text()).get("packages", [])
@@ -375,6 +451,7 @@ def main(argv: list[str] | None = None) -> int:
     for command in ("preview", "install", "check"): 
         item = subcommands.add_parser(command)
         item.add_argument("--harness", choices=("all", "claude", "pi"), default="all")
+        item.add_argument("--component", action="append", choices=("skills", "agents", "instructions"), help="deploy only this component (repeatable)")
         if command == "install":
             item.add_argument("--dry-run", action="store_true")
             item.add_argument("--adopt-legacy", action="store_true", help="adopt recognized links from the old skills or pi-kit checkouts")
@@ -385,19 +462,21 @@ def main(argv: list[str] | None = None) -> int:
                 help="leave this destination unmanaged instead of treating it as a blocking conflict (repeatable)",
             )
     args = parser.parse_args(argv)
+    components = frozenset(args.component) if args.component else COMPONENTS
     try:
-        policy, agents = load_catalog()
-        files = render(policy, agents)
         if args.command == "preview":
+            policy, agents = load_catalog(args.harness, components)
             # Render validation is intentionally performed without writing output.
-            del files
-            operations, _ = preview(args.harness, agents)
+            if agents:
+                render(policy, agents, args.harness)
+            operations, _ = preview(args.harness, agents, components)
+            operations.extend(agent_execution_plan(args.harness, components))
             print_plan(operations)
             return 2 if any(operation.action == "conflict" for operation in operations) else 0
         if args.command == "install":
             skip = frozenset(Path(value).expanduser().absolute() for value in args.skip or ())
-            return install(args.harness, args.dry_run, args.adopt_legacy, skip)
-        return check(args.harness)
+            return install(args.harness, components, args.dry_run, args.adopt_legacy, skip)
+        return check(args.harness, components)
     except KitError as error:
         print(f"harness-kit: {error}", file=sys.stderr)
         return 2
