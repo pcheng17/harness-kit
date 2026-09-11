@@ -5,5 +5,5 @@ This repository owns shared agent and skill content plus adapters that deploy it
 - Keep authored content under `content/` and harness-specific assets under `harnesses/`.
 - Never edit `.generated/`; it is deterministic build output.
 - Run `uv run harness-kit check` before applying changes.
-- Use `uv run harness-kit plan` before deployment and `uv run harness-kit apply` to mutate harness state.
+- Use `uv run harness-kit preview` before deployment and `uv run harness-kit install` to mutate harness state.
 - Do not overwrite unmanaged files or symlinks.

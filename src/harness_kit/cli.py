@@ -221,7 +221,7 @@ def selected_destination(path: Path, harness: str) -> bool:
     return any(path.is_relative_to(root) for root in roots)
 
 
-def plan(harness: str, agents: list[Agent], adopt_legacy: bool = False) -> tuple[list[Operation], dict[str, str]]:
+def preview(harness: str, agents: list[Agent], adopt_legacy: bool = False) -> tuple[list[Operation], dict[str, str]]:
     state = load_state()
     desired = desired_links(harness, agents)
     desired_by_destination = {str(link.destination): link for link in desired}
@@ -283,10 +283,10 @@ def run(command: list[str]) -> None:
         raise KitError(f"external command failed ({error.returncode}): {' '.join(command)}") from error
 
 
-def apply(harness: str, dry_run: bool, adopt_legacy: bool) -> int:
+def install(harness: str, dry_run: bool, adopt_legacy: bool) -> int:
     policy, agents = load_catalog()
     files = render(policy, agents)
-    operations, next_state = plan(harness, agents, adopt_legacy)
+    operations, next_state = preview(harness, agents, adopt_legacy)
     print_plan(operations)
     conflicts = [operation for operation in operations if operation.action == "conflict"]
     if conflicts:
@@ -321,7 +321,7 @@ def apply(harness: str, dry_run: bool, adopt_legacy: bool) -> int:
 def check(harness: str) -> int:
     policy, agents = load_catalog()
     files = render(policy, agents)
-    operations, _ = plan(harness, agents)
+    operations, _ = preview(harness, agents)
     drift = not verify_generated(files) or any(operation.action != "noop" for operation in operations)
     if harness in ("all", "pi"):
         settings = home() / ".pi/agent/settings.json"
@@ -331,7 +331,7 @@ def check(harness: str) -> int:
             installed = False
         drift = drift or not installed or legacy_pi_package_registered()
     if drift:
-        print("harness-kit is valid but not converged; run: uv run harness-kit apply")
+        print("harness-kit is valid but not converged; run: uv run harness-kit install")
         print_plan(operations)
         return 1
     print("harness-kit is valid and converged")
@@ -341,24 +341,24 @@ def check(harness: str) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="harness-kit")
     subcommands = parser.add_subparsers(dest="command", required=True)
-    for command in ("plan", "apply", "check"):
+    for command in ("preview", "install", "check"): 
         item = subcommands.add_parser(command)
         item.add_argument("--harness", choices=("all", "claude", "pi"), default="all")
-        if command == "apply":
+        if command == "install":
             item.add_argument("--dry-run", action="store_true")
             item.add_argument("--adopt-legacy", action="store_true", help="adopt recognized links from the old skills or pi-kit checkouts")
     args = parser.parse_args(argv)
     try:
         policy, agents = load_catalog()
         files = render(policy, agents)
-        if args.command == "plan":
+        if args.command == "preview":
             # Render validation is intentionally performed without writing output.
             del files
-            operations, _ = plan(args.harness, agents)
+            operations, _ = preview(args.harness, agents)
             print_plan(operations)
             return 2 if any(operation.action == "conflict" for operation in operations) else 0
-        if args.command == "apply":
-            return apply(args.harness, args.dry_run, args.adopt_legacy)
+        if args.command == "install":
+            return install(args.harness, args.dry_run, args.adopt_legacy)
         return check(args.harness)
     except KitError as error:
         print(f"harness-kit: {error}", file=sys.stderr)

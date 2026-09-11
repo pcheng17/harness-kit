@@ -44,15 +44,15 @@ class HarnessKitTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def test_plan_is_read_only(self) -> None:
-        result = invoke(self.path, "plan")
+    def test_preview_is_read_only(self) -> None:
+        result = invoke(self.path, "preview")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("create", result.stdout)
         self.assertFalse((self.path / "commands").exists())
         self.assertFalse((self.path / "home").exists())
 
-    def test_apply_is_idempotent_and_owns_links(self) -> None:
-        first = invoke(self.path, "apply")
+    def test_install_is_idempotent_and_owns_links(self) -> None:
+        first = invoke(self.path, "install")
         self.assertEqual(first.returncode, 0, first.stderr)
         home = self.path / "home"
         self.assertTrue((home / ".claude/agents/scout.md").is_symlink())
@@ -63,42 +63,42 @@ class HarnessKitTests(unittest.TestCase):
         state = json.loads((self.path / "state/harness-kit/state.json").read_text())
         self.assertIn(str(home.resolve() / ".pi/agent/AGENTS.md"), state["links"])
 
-        second = invoke(self.path, "apply")
+        second = invoke(self.path, "install")
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertIn("noop", second.stdout)
 
     def test_pi_agents_default_to_medium_thinking(self) -> None:
-        result = invoke(self.path, "apply", "--harness", "pi")
+        result = invoke(self.path, "install", "--harness", "pi")
         self.assertEqual(result.returncode, 0, result.stderr)
         generated_agents = sorted((ROOT / ".generated/pi/agents").glob("*.md"))
         self.assertEqual(len(generated_agents), 5)
         for agent in generated_agents:
             self.assertIn("thinking: medium\n", agent.read_text(), agent)
 
-    def test_scoped_apply_preserves_other_harness_links(self) -> None:
-        first = invoke(self.path, "apply")
+    def test_scoped_install_preserves_other_harness_links(self) -> None:
+        first = invoke(self.path, "install")
         self.assertEqual(first.returncode, 0, first.stderr)
-        second = invoke(self.path, "apply", "--harness", "pi")
+        second = invoke(self.path, "install", "--harness", "pi")
         self.assertEqual(second.returncode, 0, second.stderr)
         claude_agent = self.path / "home/.claude/agents/scout.md"
         self.assertTrue(claude_agent.is_symlink())
         state = json.loads((self.path / "state/harness-kit/state.json").read_text())
         self.assertIn(str(claude_agent.parent.resolve() / claude_agent.name), state["links"])
 
-    def test_apply_refuses_foreign_destination(self) -> None:
+    def test_install_refuses_foreign_destination(self) -> None:
         foreign = self.path / "home/.pi/agent/AGENTS.md"
         foreign.parent.mkdir(parents=True)
         foreign.write_text("foreign\n")
-        result = invoke(self.path, "apply", "--harness", "pi")
+        result = invoke(self.path, "install", "--harness", "pi")
         self.assertEqual(result.returncode, 2)
         self.assertEqual(foreign.read_text(), "foreign\n")
         self.assertFalse((self.path / "commands").exists())
 
-    def test_apply_adopts_known_legacy_pi_instruction_link(self) -> None:
+    def test_install_adopts_known_legacy_pi_instruction_link(self) -> None:
         destination = self.path / "home/.pi/agent/AGENTS.md"
         destination.parent.mkdir(parents=True)
         destination.symlink_to("/Users/pcheng/dev/pi-kit/config/pi/AGENTS.md")
-        result = invoke(self.path, "apply", "--harness", "pi", "--adopt-legacy")
+        result = invoke(self.path, "install", "--harness", "pi", "--adopt-legacy")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(destination.resolve(), ROOT / "harnesses/pi/AGENTS.md")
 
