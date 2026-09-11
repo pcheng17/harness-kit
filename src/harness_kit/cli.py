@@ -16,9 +16,6 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 GENERATED = ROOT / ".generated"
 COMMON_INSTRUCTIONS = ROOT / "content/instructions/AGENTS.md"
-LEGACY_SKILLS = Path("/Users/pcheng/dev/skills/skills")
-LEGACY_PI_INSTRUCTIONS = Path("/Users/pcheng/dev/pi-kit/config/pi/AGENTS.md")
-LEGACY_PI_PACKAGE = Path("/Users/pcheng/dev/pi-kit")
 
 
 class KitError(RuntimeError):
@@ -55,6 +52,18 @@ def home() -> Path:
     if not value:
         raise KitError("HOME is not set")
     return Path(value).expanduser().resolve()
+
+
+def legacy_skills() -> Path:
+    return home() / "dev/skills/skills"
+
+
+def legacy_pi_instructions() -> Path:
+    return home() / "dev/pi-kit/config/pi/AGENTS.md"
+
+
+def legacy_pi_package() -> Path:
+    return home() / "dev/pi-kit"
 
 
 def state_path() -> Path:
@@ -211,9 +220,9 @@ def is_legacy_target(link: Link, current: Path | None) -> bool:
     if current is None:
         return False
     if link.kind in {"claude-skill", "shared-skill"}:
-        return current == (LEGACY_SKILLS / link.target.name).resolve()
+        return current == (legacy_skills() / link.target.name).resolve()
     if link.kind == "common-instructions" and link.destination == home() / ".pi/agent/AGENTS.md":
-        return current == LEGACY_PI_INSTRUCTIONS.resolve()
+        return current == legacy_pi_instructions().resolve()
     return False
 
 
@@ -283,7 +292,7 @@ def legacy_pi_package_registered() -> bool:
         return False
     for entry in packages:
         source = entry if isinstance(entry, str) else entry.get("source") if isinstance(entry, dict) else None
-        if isinstance(source, str) and (settings.parent / source).resolve() == LEGACY_PI_PACKAGE.resolve():
+        if isinstance(source, str) and (settings.parent / source).resolve() == legacy_pi_package().resolve():
             return True
     return False
 
@@ -313,7 +322,7 @@ def install(harness: str, dry_run: bool, adopt_legacy: bool) -> int:
     if harness in ("all", "pi"):
         run(["npm", "ci"])
         if legacy_pi_package_registered():
-            run(["pi", "remove", str(LEGACY_PI_PACKAGE)])
+            run(["pi", "remove", str(legacy_pi_package())])
         run(["pi", "install", str(ROOT)])
     for operation in operations:
         path = operation.link.destination

@@ -141,7 +141,10 @@ class HarnessKitTests(unittest.TestCase):
     def test_install_adopts_known_legacy_pi_instruction_link(self) -> None:
         destination = self.path / "home/.pi/agent/AGENTS.md"
         destination.parent.mkdir(parents=True)
-        destination.symlink_to("/Users/pcheng/dev/pi-kit/config/pi/AGENTS.md")
+        legacy = self.path / "home/dev/pi-kit/config/pi/AGENTS.md"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("legacy\n")
+        destination.symlink_to(legacy)
         result = invoke(self.path, "install", "--harness", "pi", "--adopt-legacy")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(destination.resolve(), ROOT / "content/instructions/AGENTS.md")
