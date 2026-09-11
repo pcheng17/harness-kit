@@ -1,0 +1,11 @@
+name = "debugger"
+description = "Root-causes hard bugs; only used when the Builder or Refuter can't isolate a cause"
+model_tier = "strong"
+tools = ["read", "grep", "find", "bash", "edit"]
+
+[claude]
+color = "purple"
+
+[pi]
+thinking = "max"
+provider = "codex"
