@@ -32,7 +32,7 @@ The installer stores ownership state under `~/.local/state/harness-kit/state.jso
 
 - `content/agents/`: generic declarative agents rendered for Claude and Pi.
 - `content/skills/`: canonical skills shared through `~/.agents/skills` and Claude.
-- `harnesses/pi/`: Pi global instructions.
+- `content/instructions/AGENTS.md`: common global instructions deployed as `~/.claude/CLAUDE.md`, `~/.agents/AGENTS.md`, and `~/.pi/agent/AGENTS.md`.
 - `.generated/`: disposable rendered agents.
 
 Pi-specific agents have intentionally been removed. Generic agents are rendered into `.generated/pi/agents` and exposed through this checkout's Pi package.

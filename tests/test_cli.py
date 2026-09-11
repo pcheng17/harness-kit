@@ -57,7 +57,14 @@ class HarnessKitTests(unittest.TestCase):
         home = self.path / "home"
         self.assertTrue((home / ".claude/agents/scout.md").is_symlink())
         self.assertTrue((home / ".agents/skills/code-review").is_symlink())
-        self.assertTrue((home / ".pi/agent/AGENTS.md").is_symlink())
+        common = ROOT / "content/instructions/AGENTS.md"
+        for destination in (
+            home / ".claude/CLAUDE.md",
+            home / ".agents/AGENTS.md",
+            home / ".pi/agent/AGENTS.md",
+        ):
+            self.assertTrue(destination.is_symlink(), destination)
+            self.assertEqual(destination.resolve(), common)
         commands = (self.path / "commands").read_text().splitlines()
         self.assertEqual(len(commands), 2)
         state = json.loads((self.path / "state/harness-kit/state.json").read_text())
@@ -82,17 +89,54 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
         claude_agent = self.path / "home/.claude/agents/scout.md"
         self.assertTrue(claude_agent.is_symlink())
+        self.assertEqual((self.path / "home/.claude/CLAUDE.md").resolve(), ROOT / "content/instructions/AGENTS.md")
         state = json.loads((self.path / "state/harness-kit/state.json").read_text())
         self.assertIn(str(claude_agent.parent.resolve() / claude_agent.name), state["links"])
 
-    def test_install_refuses_foreign_destination(self) -> None:
-        foreign = self.path / "home/.pi/agent/AGENTS.md"
-        foreign.parent.mkdir(parents=True)
-        foreign.write_text("foreign\n")
+    def test_scoped_install_deploys_only_requested_common_locations(self) -> None:
+        claude = invoke(self.path, "install", "--harness", "claude")
+        self.assertEqual(claude.returncode, 0, claude.stderr)
+        home = self.path / "home"
+        self.assertTrue((home / ".claude/CLAUDE.md").is_symlink())
+        self.assertFalse((home / ".agents/AGENTS.md").exists())
+        self.assertFalse((home / ".pi/agent/AGENTS.md").exists())
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            pi = invoke(path, "install", "--harness", "pi")
+            self.assertEqual(pi.returncode, 0, pi.stderr)
+            pi_home = path / "home"
+            self.assertFalse((pi_home / ".claude/CLAUDE.md").exists())
+            self.assertTrue((pi_home / ".agents/AGENTS.md").is_symlink())
+            self.assertTrue((pi_home / ".pi/agent/AGENTS.md").is_symlink())
+
+    def test_install_does_not_claim_matching_unmanaged_instruction_link(self) -> None:
+        destination = self.path / "home/.agents/AGENTS.md"
+        destination.parent.mkdir(parents=True)
+        destination.symlink_to(ROOT / "content/instructions/AGENTS.md")
         result = invoke(self.path, "install", "--harness", "pi")
-        self.assertEqual(result.returncode, 2)
-        self.assertEqual(foreign.read_text(), "foreign\n")
-        self.assertFalse((self.path / "commands").exists())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(destination.resolve(), ROOT / "content/instructions/AGENTS.md")
+        state = json.loads((self.path / "state/harness-kit/state.json").read_text())
+        self.assertNotIn(str(destination.parent.resolve() / destination.name), state["links"])
+
+    def test_install_refuses_foreign_common_instruction_destinations(self) -> None:
+        destinations = (
+            ("claude", ".claude/CLAUDE.md"),
+            ("pi", ".agents/AGENTS.md"),
+            ("pi", ".pi/agent/AGENTS.md"),
+        )
+        for harness, relative_destination in destinations:
+            with self.subTest(destination=relative_destination):
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory)
+                    foreign = path / "home" / relative_destination
+                    foreign.parent.mkdir(parents=True)
+                    foreign.write_text("foreign\n")
+                    result = invoke(path, "install", "--harness", harness)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(foreign.read_text(), "foreign\n")
+                    self.assertFalse((path / "commands").exists())
 
     def test_install_adopts_known_legacy_pi_instruction_link(self) -> None:
         destination = self.path / "home/.pi/agent/AGENTS.md"
@@ -100,7 +144,7 @@ class HarnessKitTests(unittest.TestCase):
         destination.symlink_to("/Users/pcheng/dev/pi-kit/config/pi/AGENTS.md")
         result = invoke(self.path, "install", "--harness", "pi", "--adopt-legacy")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(destination.resolve(), ROOT / "harnesses/pi/AGENTS.md")
+        self.assertEqual(destination.resolve(), ROOT / "content/instructions/AGENTS.md")
 
 
 if __name__ == "__main__":

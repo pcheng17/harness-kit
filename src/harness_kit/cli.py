@@ -15,6 +15,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 GENERATED = ROOT / ".generated"
+COMMON_INSTRUCTIONS = ROOT / "content/instructions/AGENTS.md"
 LEGACY_SKILLS = Path("/Users/pcheng/dev/skills/skills")
 LEGACY_PI_INSTRUCTIONS = Path("/Users/pcheng/dev/pi-kit/config/pi/AGENTS.md")
 LEGACY_PI_PACKAGE = Path("/Users/pcheng/dev/pi-kit")
@@ -93,6 +94,8 @@ def load_catalog() -> tuple[dict[str, Any], list[Agent]]:
         agents.append(Agent(name, data["description"], tier, tuple(tools), prompt_path.read_text(), data.get("claude", {}), data.get("pi", {})))
     if not agents:
         raise KitError("no agents found")
+    if not COMMON_INSTRUCTIONS.is_file():
+        raise KitError(f"missing common instructions: {COMMON_INSTRUCTIONS}")
     validate_catalog(policy, agents)
     return policy, agents
 
@@ -180,6 +183,7 @@ def desired_links(harness: str, agents: list[Agent]) -> list[Link]:
     user_home = home()
     links: list[Link] = []
     if harness in ("all", "claude"):
+        links.append(Link(user_home / ".claude/CLAUDE.md", COMMON_INSTRUCTIONS, "common-instructions"))
         for agent in agents:
             agent_file = GENERATED / "claude/agents" / f"{agent.name}.md"
             links.append(Link(user_home / ".claude/agents" / agent_file.name, agent_file, "claude-agent"))
@@ -187,7 +191,10 @@ def desired_links(harness: str, agents: list[Agent]) -> list[Link]:
             if skill.is_dir() and (skill / "SKILL.md").is_file():
                 links.append(Link(user_home / ".claude/skills" / skill.name, skill, "claude-skill"))
     if harness in ("all", "pi"):
-        links.append(Link(user_home / ".pi/agent/AGENTS.md", ROOT / "harnesses/pi/AGENTS.md", "pi-instructions"))
+        links.extend((
+            Link(user_home / ".agents/AGENTS.md", COMMON_INSTRUCTIONS, "common-instructions"),
+            Link(user_home / ".pi/agent/AGENTS.md", COMMON_INSTRUCTIONS, "common-instructions"),
+        ))
         for skill in sorted((ROOT / "content/skills").iterdir()):
             if skill.is_dir() and (skill / "SKILL.md").is_file():
                 links.append(Link(user_home / ".agents/skills" / skill.name, skill, "shared-skill"))
@@ -205,7 +212,7 @@ def is_legacy_target(link: Link, current: Path | None) -> bool:
         return False
     if link.kind in {"claude-skill", "shared-skill"}:
         return current == (LEGACY_SKILLS / link.target.name).resolve()
-    if link.kind == "pi-instructions":
+    if link.kind == "common-instructions" and link.destination == home() / ".pi/agent/AGENTS.md":
         return current == LEGACY_PI_INSTRUCTIONS.resolve()
     return False
 
@@ -247,7 +254,14 @@ def preview(harness: str, agents: list[Agent], adopt_legacy: bool = False) -> tu
         next_state.pop(destination, None)
         if link_target(path) == Path(old_target).resolve():
             operations.append(Operation("remove", Link(path, Path(old_target), "stale")))
-    next_state.update({str(link.destination): str(link.target.resolve()) for link in desired})
+    operations_by_destination = {str(operation.link.destination): operation for operation in operations}
+    for link in desired:
+        destination = str(link.destination)
+        operation = operations_by_destination[destination]
+        # A pre-existing matching symlink may belong to another installer. Leave
+        # it usable, but do not claim it without prior ownership or adoption.
+        if destination in state or operation.action in {"create", "update", "adopt"}:
+            next_state[destination] = str(link.target.resolve())
     return operations, next_state
 
 
