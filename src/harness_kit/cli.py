@@ -321,7 +321,7 @@ def run(command: list[str]) -> None:
         raise KitError(f"external command failed ({error.returncode}): {' '.join(command)}") from error
 
 
-def install(harness: str, components: frozenset[str], dry_run: bool) -> int:
+def install(harness: str, components: frozenset[str]) -> int:
     policy, agents = load_catalog(harness, components)
     files = render(policy, agents, harness) if agents else {}
     operations = preview(harness, agents, components)
@@ -330,8 +330,6 @@ def install(harness: str, components: frozenset[str], dry_run: bool) -> int:
     conflicts = [operation for operation in operations if operation.action == "conflict"]
     if conflicts:
         raise KitError("refusing to overwrite unmanaged destinations")
-    if dry_run:
-        return 0
     if "agents" in components:
         materialize(files, harness)
     if harness in ("all", "pi") and "agents" in components:
@@ -386,8 +384,6 @@ def main(argv: list[str] | None = None) -> int:
         item = subcommands.add_parser(command, help=COMMAND_HELP[command], description=COMMAND_HELP[command])
         item.add_argument("--harness", choices=("all", "claude", "pi"), default="all", help="limit to this harness (default: all)")
         item.add_argument("--component", action="append", choices=("skills", "agents", "instructions"), help="deploy only this component (repeatable)")
-        if command == "install":
-            item.add_argument("--dry-run", action="store_true", help="print the plan without applying it")
     args = parser.parse_args(argv)
     components = frozenset(args.component) if args.component else COMPONENTS
     try:
@@ -401,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
             print_plan(operations)
             return 2 if any(operation.action == "conflict" for operation in operations) else 0
         if args.command == "install":
-            return install(args.harness, components, args.dry_run)
+            return install(args.harness, components)
         return check(args.harness, components)
     except KitError as error:
         print(f"harness-kit: {error}", file=sys.stderr)
