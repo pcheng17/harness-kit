@@ -445,7 +445,7 @@ def validate_operation_preconditions(operation: Operation) -> None:
     if operation.action == "create":
         if exists:
             raise KitError(f"refusing to create substituted destination: {path}")
-    elif operation.action in {"update", "remove"}:
+    elif operation.action == "remove":
         if current != operation.expected_target:
             raise KitError(f"refusing to mutate substituted destination: {path}")
 
@@ -485,10 +485,8 @@ def preview(
             operations.append(Operation("create", link))
         elif current == link.target.resolve():
             operations.append(Operation("noop", link))
-        elif destination in state and current == Path(state[destination]).resolve():
-            operations.append(Operation("update", link, "previously owned target", current))
         else:
-            operations.append(Operation("conflict", link, "unmanaged destination"))
+            operations.append(Operation("conflict", link, "destination target differs"))
     next_state = dict(state)
     for destination, old_target in state.items():
         if destination in desired_by_destination or not selected_destination(Path(destination), harness, components):
@@ -504,7 +502,7 @@ def preview(
         operation = operations_by_destination[destination]
         # A pre-existing matching symlink may belong to another installer. Leave
         # it usable, but do not claim it without prior ownership.
-        if destination in state or operation.action in {"create", "update"}:
+        if destination in state or operation.action == "create":
             next_state[destination] = str(link.target.resolve())
     return operations, next_state
 
@@ -569,7 +567,7 @@ def install(harness: str, components: frozenset[str], dry_run: bool) -> int:
         if operation.action == "remove":
             validate_operation_preconditions(operation)
             path.unlink()
-        elif operation.action in ("create", "update"):
+        elif operation.action == "create":
             validate_operation_preconditions(operation)
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.is_symlink() or path.exists():
