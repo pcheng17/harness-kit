@@ -1,18 +1,14 @@
-"""Ownership-aware build and deployment CLI for harness-kit."""
+"""Stateless build and deployment CLI for harness-kit."""
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import re
-import secrets
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
 import tomllib
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -67,137 +63,6 @@ def require_relative_to(path: Path, root: Path) -> Path:
     if not resolved.is_relative_to(root.resolve()):
         raise KitError(f"refusing destructive operation outside {root}: {resolved}")
     return resolved
-
-
-def state_path() -> Path:
-    value = os.environ.get("XDG_STATE_HOME")
-    if value is None:
-        root = home() / ".local/state"
-    else:
-        if not value:
-            raise KitError("XDG_STATE_HOME must be nonempty")
-        root = Path(value)
-    if not root.is_absolute():
-        raise KitError(f"XDG_STATE_HOME must be absolute: {root}")
-    if len(root.parts) < 3:
-        raise KitError(f"XDG_STATE_HOME is suspiciously shallow: {root}")
-    return root / "harness-kit/state.json"
-
-
-def _state_directory_error(path: Path, parent_descriptor: int, name: str, error: OSError) -> KitError:
-    try:
-        info = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
-    except FileNotFoundError:
-        return KitError(f"cannot inspect state directory {path}: {error}")
-    if stat.S_ISLNK(info.st_mode):
-        return KitError(f"refusing state path with symlinked ancestor: {path}")
-    if not stat.S_ISDIR(info.st_mode):
-        return KitError(f"refusing state path with non-directory ancestor: {path}")
-    return KitError(f"cannot inspect state directory {path}: {error}")
-
-
-@contextmanager
-def state_directory(create_directories: bool = False):
-    """Pin the state directory while traversing each component without links."""
-    path = state_path()
-    parts = path.parent.parts
-    descriptor = os.open(parts[0], os.O_RDONLY | os.O_DIRECTORY)
-    current = Path(parts[0])
-    try:
-        for name in parts[1:]:
-            current /= name
-            try:
-                child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
-            except FileNotFoundError:
-                if not create_directories:
-                    yield None
-                    return
-                try:
-                    os.mkdir(name, dir_fd=descriptor)
-                    child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
-                except OSError as error:
-                    raise _state_directory_error(current, descriptor, name, error) from error
-            except OSError as error:
-                raise _state_directory_error(current, descriptor, name, error) from error
-            os.close(descriptor)
-            descriptor = child
-        yield descriptor
-    finally:
-        os.close(descriptor)
-
-
-def validate_pinned_state_directory(descriptor: int, path: Path) -> None:
-    try:
-        info = os.fstat(descriptor)
-    except OSError as error:
-        raise KitError(f"cannot inspect state directory {path.parent}: {error}") from error
-    if not stat.S_ISDIR(info.st_mode):
-        raise KitError(f"refusing state path with non-directory ancestor: {path.parent}")
-
-
-def validate_state_entry(descriptor: int, path: Path) -> bool:
-    try:
-        info = os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
-    except FileNotFoundError:
-        return False
-    except OSError as error:
-        raise KitError(f"cannot inspect ownership state {path}: {error}") from error
-    if stat.S_ISLNK(info.st_mode):
-        raise KitError(f"refusing ownership state symlink: {path}")
-    if not stat.S_ISREG(info.st_mode):
-        raise KitError(f"refusing ownership state non-regular file: {path}")
-    return True
-
-
-def temporary_matches(descriptor: int, name: str, identity: os.stat_result) -> bool:
-    try:
-        current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-    except FileNotFoundError:
-        return False
-    return (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino)
-
-
-def write_state(links: dict[str, str]) -> None:
-    path = state_path()
-    name: str | None = None
-    identity: os.stat_result | None = None
-    with state_directory(create_directories=True) as descriptor:
-        assert descriptor is not None
-        validate_state_entry(descriptor, path)
-        try:
-            for _ in range(100):
-                candidate = f".state-{secrets.token_hex(16)}.tmp"
-                try:
-                    file_descriptor = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=descriptor)
-                    name = candidate
-                    break
-                except FileExistsError:
-                    continue
-            else:
-                raise KitError(f"cannot create ownership state temporary in {path.parent}")
-            identity = os.fstat(file_descriptor)
-            with os.fdopen(file_descriptor, "w") as file:
-                file.write(json.dumps({"links": links}, indent=2, sort_keys=True) + "\n")
-                file.flush()
-                os.fsync(file.fileno())
-            if not temporary_matches(descriptor, name, identity):
-                raise KitError(f"ownership state temporary was substituted: {path.parent / name}")
-            # Recheck the pinned directory and final entry immediately before replacement.
-            validate_pinned_state_directory(descriptor, path)
-            validate_state_entry(descriptor, path)
-            os.replace(name, path.name, src_dir_fd=descriptor, dst_dir_fd=descriptor)
-            name = None
-            os.fsync(descriptor)
-        except OSError as error:
-            raise KitError(f"cannot write ownership state {path}: {error}") from error
-        finally:
-            if name is not None and identity is not None and temporary_matches(descriptor, name, identity):
-                try:
-                    os.unlink(name, dir_fd=descriptor)
-                except FileNotFoundError:
-                    pass
-                except OSError:
-                    pass
 
 
 def load_toml(path: Path) -> dict[str, Any]:
@@ -329,61 +194,6 @@ def materialize(files: dict[Path, str], harness: str) -> None:
             shutil.rmtree(require_relative_to(temporary_root, ROOT), ignore_errors=True)
 
 
-_MANAGED_BASENAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
-
-
-def managed_destination_kind(value: str) -> str | None:
-    """Classify an exact, normalized ownership-state destination key."""
-    if not value or "\0" in value:
-        return None
-    path = Path(value)
-    # Keep this lexical: state paths must be normalized, and symlinked
-    # ancestors are intentionally outside this PR's scope.
-    if not path.is_absolute() or str(path) != value:
-        return None
-    user_home = home()
-    fixed = {
-        user_home / ".claude/CLAUDE.md": "claude-instructions",
-        user_home / ".agents/AGENTS.md": "shared-instructions",
-        user_home / ".pi/agent/AGENTS.md": "pi-instructions",
-    }
-    if path in fixed:
-        return fixed[path]
-    if path.parent == user_home / ".claude/agents":
-        return "claude-agent" if path.suffix == ".md" and _MANAGED_BASENAME.fullmatch(path.stem) else None
-    if path.parent == user_home / ".claude/skills":
-        return "claude-skill" if _MANAGED_BASENAME.fullmatch(path.name) else None
-    if path.parent == user_home / ".agents/skills":
-        return "shared-skill" if _MANAGED_BASENAME.fullmatch(path.name) else None
-    return None
-
-
-def is_managed_destination(value: str) -> bool:
-    return managed_destination_kind(value) is not None
-
-
-def load_state() -> dict[str, str]:
-    path = state_path()
-    with state_directory() as descriptor:
-        if descriptor is None or not validate_state_entry(descriptor, path):
-            return {}
-        try:
-            file_descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=descriptor)
-            with os.fdopen(file_descriptor) as file:
-                info = os.fstat(file.fileno())
-                if not stat.S_ISREG(info.st_mode):
-                    raise ValueError("state.json is not a regular file")
-                data = json.load(file)
-            links = data.get("links", {})
-            if not isinstance(links, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in links.items()):
-                raise ValueError("links must be a string map")
-            if not all(is_managed_destination(destination) for destination in links):
-                raise ValueError("links contain an unmanaged or malformed destination")
-            return links
-        except (OSError, ValueError, json.JSONDecodeError) as error:
-            raise KitError(f"invalid ownership state {path}: {error}") from error
-
-
 def desired_links(harness: str, agents: list[Agent], components: frozenset[str]) -> list[Link]:
     user_home = home()
     links: list[Link] = []
@@ -449,15 +259,11 @@ def preview(
     harness: str,
     agents: list[Agent],
     components: frozenset[str] = COMPONENTS,
-) -> tuple[list[Operation], dict[str, str]]:
-    state = load_state()
-    for destination in state:
-        validate_managed_ancestors(Path(destination))
+) -> list[Operation]:
     desired = desired_links(harness, agents, components)
     operations: list[Operation] = []
     for link in desired:
         validate_managed_ancestors(link.destination)
-        destination = str(link.destination)
         current = link_target(link.destination)
         if not link.destination.exists() and not link.destination.is_symlink():
             operations.append(Operation("create", link))
@@ -465,16 +271,7 @@ def preview(
             operations.append(Operation("noop", link))
         else:
             operations.append(Operation("conflict", link, "destination target differs"))
-    next_state = dict(state)
-    operations_by_destination = {str(operation.link.destination): operation for operation in operations}
-    for link in desired:
-        destination = str(link.destination)
-        operation = operations_by_destination[destination]
-        # A pre-existing matching symlink may belong to another installer. Leave
-        # it usable, but do not claim it without prior ownership.
-        if destination in state or operation.action == "create":
-            next_state[destination] = str(link.target.resolve())
-    return operations, next_state
+    return operations
 
 
 def agent_execution_plan(harness: str, components: frozenset[str]) -> list[Operation]:
@@ -519,7 +316,7 @@ def run(command: list[str]) -> None:
 def install(harness: str, components: frozenset[str], dry_run: bool) -> int:
     policy, agents = load_catalog(harness, components)
     files = render(policy, agents, harness) if agents else {}
-    operations, next_state = preview(harness, agents, components)
+    operations = preview(harness, agents, components)
     operations.extend(agent_execution_plan(harness, components))
     print_plan(operations)
     conflicts = [operation for operation in operations if operation.action == "conflict"]
@@ -537,17 +334,17 @@ def install(harness: str, components: frozenset[str], dry_run: bool) -> int:
         if operation.action == "create":
             validate_operation_preconditions(operation)
             path.parent.mkdir(parents=True, exist_ok=True)
-            if path.is_symlink() or path.exists():
-                path.unlink()
-            path.symlink_to(operation.link.target)
-    write_state(next_state)
+            try:
+                path.symlink_to(operation.link.target)
+            except FileExistsError as error:
+                raise KitError(f"refusing to replace substituted destination: {path}") from error
     return 0
 
 
 def check(harness: str, components: frozenset[str]) -> int:
     policy, agents = load_catalog(harness, components)
     files = render(policy, agents, harness) if agents else {}
-    operations, _ = preview(harness, agents, components)
+    operations = preview(harness, agents, components)
     drift = ("agents" in components and not verify_generated(files, harness)) or any(operation.action != "noop" for operation in operations)
     if harness in ("all", "pi") and "agents" in components:
         settings = home() / ".pi/agent/settings.json"
@@ -566,7 +363,7 @@ def check(harness: str, components: frozenset[str]) -> int:
 
 COMMAND_HELP = {
     "preview": "show what install would change, without touching the filesystem",
-    "install": "deploy content into the harness(es) and record ownership",
+    "install": "deploy content into the harness(es)",
     "check": "exit non-zero if the harness(es) are not converged with content",
 }
 
@@ -591,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
             # Render validation is intentionally performed without writing output.
             if agents:
                 render(policy, agents, args.harness)
-            operations, _ = preview(args.harness, agents, components)
+            operations = preview(args.harness, agents, components)
             operations.extend(agent_execution_plan(args.harness, components))
             print_plan(operations)
             return 2 if any(operation.action == "conflict" for operation in operations) else 0
