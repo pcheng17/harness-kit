@@ -50,7 +50,6 @@ class Operation:
     action: str
     link: Link
     detail: str = ""
-    expected_target: Path | None = None
 
 
 def home() -> Path:
@@ -440,30 +439,10 @@ def validate_operation_preconditions(operation: Operation) -> None:
     """Recheck the plan's filesystem observations immediately before mutation."""
     path = operation.link.destination
     validate_managed_ancestors(path)
-    current = link_target(path)
     exists = path.exists() or path.is_symlink()
     if operation.action == "create":
         if exists:
             raise KitError(f"refusing to create substituted destination: {path}")
-    elif operation.action == "remove":
-        if current != operation.expected_target:
-            raise KitError(f"refusing to mutate substituted destination: {path}")
-
-def selected_destination(path: Path, harness: str, components: frozenset[str]) -> bool:
-    # State is validated before this is called; classify it again rather than
-    # treating an entire harness directory as owned.
-    kind = managed_destination_kind(str(path))
-    if kind is None:
-        return False
-    if kind == "claude-instructions":
-        return harness in ("all", "claude") and "instructions" in components
-    if kind in {"shared-instructions", "pi-instructions"}:
-        return harness in ("all", "pi") and "instructions" in components
-    if kind == "claude-agent":
-        return harness in ("all", "claude") and "agents" in components
-    if kind == "claude-skill":
-        return harness in ("all", "claude") and "skills" in components
-    return harness in ("all", "pi") and "skills" in components
 
 
 def preview(
@@ -475,7 +454,6 @@ def preview(
     for destination in state:
         validate_managed_ancestors(Path(destination))
     desired = desired_links(harness, agents, components)
-    desired_by_destination = {str(link.destination): link for link in desired}
     operations: list[Operation] = []
     for link in desired:
         validate_managed_ancestors(link.destination)
@@ -488,14 +466,6 @@ def preview(
         else:
             operations.append(Operation("conflict", link, "destination target differs"))
     next_state = dict(state)
-    for destination, old_target in state.items():
-        if destination in desired_by_destination or not selected_destination(Path(destination), harness, components):
-            continue
-        path = Path(destination)
-        next_state.pop(destination, None)
-        current = link_target(path)
-        if current == Path(old_target).resolve():
-            operations.append(Operation("remove", Link(path, Path(old_target), "stale"), expected_target=current))
     operations_by_destination = {str(operation.link.destination): operation for operation in operations}
     for link in desired:
         destination = str(link.destination)
@@ -564,10 +534,7 @@ def install(harness: str, components: frozenset[str], dry_run: bool) -> int:
         run(["pi", "install", str(ROOT)])
     for operation in operations:
         path = operation.link.destination
-        if operation.action == "remove":
-            validate_operation_preconditions(operation)
-            path.unlink()
-        elif operation.action == "create":
+        if operation.action == "create":
             validate_operation_preconditions(operation)
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.is_symlink() or path.exists():

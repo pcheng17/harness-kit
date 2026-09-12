@@ -450,28 +450,33 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(state.read_text(), original_state)
         self.assertNotEqual(destination.resolve(), target_b.resolve())
 
-    def test_install_revalidates_stale_remove_before_unlink(self) -> None:
-        self.assertEqual(invoke(self.sandbox, "install", "--harness", "pi").returncode, 0)
+    def test_stale_deployed_skill_link_is_preserved_when_source_leaves_catalog(self) -> None:
+        # A stale deployed link is intentionally different from stale generated
+        # files, which install must still detect and clean (see its dedicated test).
+        self.assertEqual(invoke(self.sandbox, "install", "--harness", "pi", "--component", "skills").returncode, 0)
         destination = self.path / "home/.agents/skills/dod"
         old_target = destination.resolve()
-        old_target.rename(self.path / "retired-skill")
-        foreign = self.path / "foreign"
-        foreign.write_text("foreign\n")
-        hook = self.path / "shim-hook"
-        hook.write_text(
-            "#!/bin/sh\n"
-            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/rm -f \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
-            % (self.path, destination, foreign, destination)
-        )
-        hook.chmod(0o755)
-
-        result = invoke(self.sandbox, "install", "--harness", "pi")
-
-        self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("substituted destination", result.stderr)
+        retired = self.path / "retired-skill"
+        old_target.rename(retired)
         self.assertTrue(destination.is_symlink())
-        self.assertEqual(destination.resolve(), foreign)
-        self.assertEqual(foreign.read_text(), "foreign\n")
+        self.assertFalse(destination.exists())
+
+        preview = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "skills")
+        self.assertEqual(preview.returncode, 0, preview.stderr)
+        self.assertNotIn("[REMOVE]", preview.stdout)
+
+        installed = invoke(self.sandbox, "install", "--harness", "pi", "--component", "skills")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        self.assertTrue(destination.is_symlink())
+        self.assertEqual(os.readlink(destination), str(old_target))
+
+        checked = invoke(self.sandbox, "check", "--harness", "pi", "--component", "skills")
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        self.assertTrue(destination.is_symlink())
+        self.assertEqual(os.readlink(destination), str(old_target))
+
+        state = json.loads((self.path / "xdg/state/harness-kit/state.json").read_text())
+        self.assertIn(str(destination), state["links"])
 
     def test_install_rejects_forged_unrelated_owned_destination_before_commands_or_mutation(self) -> None:
         settings = self.path / "home/.pi/agent/settings.json"
