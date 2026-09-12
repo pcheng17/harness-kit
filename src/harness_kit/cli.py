@@ -463,15 +463,25 @@ def check(harness: str, components: frozenset[str]) -> int:
     return 0
 
 
+COMMAND_HELP = {
+    "preview": "show what install would change, without touching the filesystem",
+    "install": "deploy content into the harness(es) and record ownership",
+    "check": "exit non-zero if the harness(es) are not converged with content",
+}
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="harness-kit")
-    subcommands = parser.add_subparsers(dest="command", required=True)
-    for command in ("preview", "install", "check"): 
-        item = subcommands.add_parser(command)
-        item.add_argument("--harness", choices=("all", "claude", "pi"), default="all")
+    parser = argparse.ArgumentParser(
+        prog="harness-kit",
+        description="Deploy shared agent, skill, and instruction content into supported harnesses.",
+    )
+    subcommands = parser.add_subparsers(dest="command", required=True, metavar="{preview,install,check}")
+    for command in ("preview", "install", "check"):
+        item = subcommands.add_parser(command, help=COMMAND_HELP[command], description=COMMAND_HELP[command])
+        item.add_argument("--harness", choices=("all", "claude", "pi"), default="all", help="limit to this harness (default: all)")
         item.add_argument("--component", action="append", choices=("skills", "agents", "instructions"), help="deploy only this component (repeatable)")
         if command == "install":
-            item.add_argument("--dry-run", action="store_true")
+            item.add_argument("--dry-run", action="store_true", help="print the plan without applying it")
             item.add_argument("--adopt-legacy", action="store_true", help="adopt recognized links from the old skills or pi-kit checkouts")
             item.add_argument(
                 "--skip",
