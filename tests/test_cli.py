@@ -682,15 +682,27 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(pi.returncode, 0, pi.stderr)
         self.assertEqual(claude_agent.read_text(), original)
 
-    def test_pi_agents_preview_lists_render_and_registration_work(self) -> None:
-        result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("[RENDER]", result.stdout)
-        self.assertIn(str(self.project / ".generated/pi/agents"), result.stdout)
-        self.assertIn("[NPM CI]", result.stdout)
-        self.assertIn("[PI INSTALL]", result.stdout)
-        self.assertIn(str(self.project), result.stdout)
-        self.assertNotIn(str(SOURCE_ROOT), result.stdout)
+    def test_agents_render_plan_matches_selected_harnesses_for_preview_and_install(self) -> None:
+        cases = (
+            ("all", ("claude", "pi"), True),
+            ("claude", ("claude",), False),
+            ("pi", ("pi",), True),
+        )
+        for command in (("preview",), ("install", "--dry-run")):
+            for harness, rendered, includes_pi_work in cases:
+                with self.subTest(command=command, harness=harness):
+                    result = invoke(self.sandbox, *command, "--harness", harness, "--component", "agents")
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.count("[RENDER]"), len(rendered))
+                    for selected in rendered:
+                        self.assertIn(str(self.project / f".generated/{selected}/agents"), result.stdout)
+                    for unselected in {"claude", "pi"} - set(rendered):
+                        self.assertNotIn(str(self.project / f".generated/{unselected}/agents"), result.stdout)
+                    self.assertEqual("[NPM CI]" in result.stdout, includes_pi_work)
+                    self.assertEqual("[PI INSTALL]" in result.stdout, includes_pi_work)
+                    self.assertIn(str(self.project), result.stdout)
+                    self.assertNotIn(str(SOURCE_ROOT), result.stdout)
+                    self.assertFalse((self.path / "commands").exists())
 
     def test_agent_install_creates_missing_generated_parent(self) -> None:
         generated = self.project / ".generated"
