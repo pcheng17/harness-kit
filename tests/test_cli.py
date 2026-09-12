@@ -576,20 +576,20 @@ class HarnessKitTests(unittest.TestCase):
                 self.assertEqual(foreign.read_text(), "foreign\n")
                 self.assertFalse((sandbox.root / "commands").exists())
 
-    def test_install_skip_unblocks_other_destinations(self) -> None:
+    def test_install_foreign_destination_conflicts_and_blocks_other_destinations(self) -> None:
         destination = self.path / "home/.claude/CLAUDE.md"
         destination.parent.mkdir(parents=True)
         foreign = self.path / "dotfiles/CLAUDE.md"
         foreign.parent.mkdir(parents=True)
         foreign.write_text("foreign\n")
         destination.symlink_to(foreign)
-        result = invoke(self.sandbox, "install", "--harness", "claude", "--skip", str(destination))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("[SKIP]", result.stdout)
+        result = invoke(self.sandbox, "install", "--harness", "claude")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("[CONFLICT]", result.stdout)
         self.assertEqual(destination.resolve(), foreign.resolve())
-        self.assertTrue((self.path / "home/.claude/agents/scout.md").is_symlink())
-        state = json.loads((self.path / "xdg/state/harness-kit/state.json").read_text())
-        self.assertNotIn(str(destination.resolve()), state["links"])
+        self.assertFalse((self.path / "home/.claude/agents/scout.md").exists())
+        self.assertFalse((self.path / "xdg/state/harness-kit/state.json").exists())
+        self.assertFalse((self.project / ".generated").exists())
 
     def test_legacy_pi_instruction_link_conflicts_and_is_preserved(self) -> None:
         destination = self.path / "home/.pi/agent/AGENTS.md"
@@ -632,6 +632,11 @@ class HarnessKitTests(unittest.TestCase):
         result = invoke(self.sandbox, "install", "--adopt-legacy")
         self.assertEqual(result.returncode, 2)
         self.assertIn("unrecognized arguments: --adopt-legacy", result.stderr)
+
+    def test_install_rejects_skip_argument(self) -> None:
+        result = invoke(self.sandbox, "install", "--skip", "/tmp/destination")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unrecognized arguments: --skip", result.stderr)
 
     def test_unselected_malformed_content_is_not_loaded(self) -> None:
         metadata = self.project / "content/agents/scout/agent.toml"

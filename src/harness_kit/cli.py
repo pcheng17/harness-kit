@@ -63,14 +63,6 @@ def home() -> Path:
     return resolved
 
 
-def canonical_destination(path: Path) -> Path:
-    """Resolve symlinked ancestor directories without following the final
-    component itself, matching how Link.destination paths are built from
-    home()."""
-    absolute = path.expanduser().absolute()
-    return absolute.parent.resolve() / absolute.name
-
-
 def require_relative_to(path: Path, root: Path) -> Path:
     resolved = path.resolve()
     if not resolved.is_relative_to(root.resolve()):
@@ -478,7 +470,6 @@ def preview(
     harness: str,
     agents: list[Agent],
     components: frozenset[str] = COMPONENTS,
-    skip: frozenset[Path] = frozenset(),
 ) -> tuple[list[Operation], dict[str, str]]:
     state = load_state()
     for destination in state:
@@ -489,9 +480,6 @@ def preview(
     for link in desired:
         validate_managed_ancestors(link.destination)
         destination = str(link.destination)
-        if link.destination.absolute() in skip:
-            operations.append(Operation("skip", link, "explicitly skipped"))
-            continue
         current = link_target(link.destination)
         if not link.destination.exists() and not link.destination.is_symlink():
             operations.append(Operation("create", link))
@@ -560,10 +548,10 @@ def run(command: list[str]) -> None:
         raise KitError(f"external command failed ({error.returncode}): {' '.join(command)}") from error
 
 
-def install(harness: str, components: frozenset[str], dry_run: bool, skip: frozenset[Path] = frozenset()) -> int:
+def install(harness: str, components: frozenset[str], dry_run: bool) -> int:
     policy, agents = load_catalog(harness, components)
     files = render(policy, agents, harness) if agents else {}
-    operations, next_state = preview(harness, agents, components, skip)
+    operations, next_state = preview(harness, agents, components)
     operations.extend(agent_execution_plan(harness, components))
     print_plan(operations)
     conflicts = [operation for operation in operations if operation.action == "conflict"]
@@ -630,12 +618,6 @@ def main(argv: list[str] | None = None) -> int:
         item.add_argument("--component", action="append", choices=("skills", "agents", "instructions"), help="deploy only this component (repeatable)")
         if command == "install":
             item.add_argument("--dry-run", action="store_true", help="print the plan without applying it")
-            item.add_argument(
-                "--skip",
-                action="append",
-                metavar="PATH",
-                help="leave this destination unmanaged instead of treating it as a blocking conflict (repeatable)",
-            )
     args = parser.parse_args(argv)
     components = frozenset(args.component) if args.component else COMPONENTS
     try:
@@ -649,8 +631,7 @@ def main(argv: list[str] | None = None) -> int:
             print_plan(operations)
             return 2 if any(operation.action == "conflict" for operation in operations) else 0
         if args.command == "install":
-            skip = frozenset(canonical_destination(Path(value)) for value in args.skip or ())
-            return install(args.harness, components, args.dry_run, skip)
+            return install(args.harness, components, args.dry_run)
         return check(args.harness, components)
     except KitError as error:
         print(f"harness-kit: {error}", file=sys.stderr)
