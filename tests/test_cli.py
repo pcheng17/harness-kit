@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -590,16 +591,47 @@ class HarnessKitTests(unittest.TestCase):
         state = json.loads((self.path / "xdg/state/harness-kit/state.json").read_text())
         self.assertNotIn(str(destination.resolve()), state["links"])
 
-    def test_install_adopts_known_legacy_pi_instruction_link(self) -> None:
+    def test_legacy_pi_instruction_link_conflicts_and_is_preserved(self) -> None:
         destination = self.path / "home/.pi/agent/AGENTS.md"
         destination.parent.mkdir(parents=True)
         legacy = self.path / "home/dev/pi-kit/config/pi/AGENTS.md"
         legacy.parent.mkdir(parents=True)
         legacy.write_text("legacy\n")
         destination.symlink_to(legacy)
-        result = invoke(self.sandbox, "install", "--harness", "pi", "--adopt-legacy")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(destination.resolve(), self.project / "content/instructions/AGENTS.md")
+        preview = invoke(self.sandbox, "preview", "--harness", "pi")
+        self.assertEqual(preview.returncode, 2)
+        self.assertIn("[CONFLICT]", preview.stdout)
+        result = invoke(self.sandbox, "install", "--harness", "pi")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("[CONFLICT]", result.stdout)
+        self.assertEqual(os.readlink(destination), str(legacy))
+        self.assertEqual(legacy.read_text(), "legacy\n")
+        self.assertFalse((self.path / "commands").exists())
+        self.assertFalse((self.path / "xdg/state/harness-kit/state.json").exists())
+        self.assertFalse((self.project / ".generated").exists())
+
+    def test_legacy_skill_link_conflicts_and_is_preserved(self) -> None:
+        destination = self.path / "home/.agents/skills/code-review"
+        destination.parent.mkdir(parents=True)
+        legacy = self.path / "home/dev/skills/skills/code-review"
+        legacy.mkdir(parents=True)
+        target_file = legacy / "SKILL.md"
+        target_file.write_text("legacy skill\n")
+        destination.symlink_to(legacy)
+        preview = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "skills")
+        self.assertEqual(preview.returncode, 2)
+        self.assertIn("[CONFLICT]", preview.stdout)
+        result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "skills")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("[CONFLICT]", result.stdout)
+        self.assertEqual(os.readlink(destination), str(legacy))
+        self.assertEqual(target_file.read_text(), "legacy skill\n")
+        self.assertFalse((self.path / "xdg/state/harness-kit/state.json").exists())
+
+    def test_install_rejects_adopt_legacy_argument(self) -> None:
+        result = invoke(self.sandbox, "install", "--adopt-legacy")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unrecognized arguments: --adopt-legacy", result.stderr)
 
     def test_unselected_malformed_content_is_not_loaded(self) -> None:
         metadata = self.project / "content/agents/scout/agent.toml"
