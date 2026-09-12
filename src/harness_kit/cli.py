@@ -275,13 +275,21 @@ def preview(
 
 
 def agent_execution_plan(harness: str, components: frozenset[str]) -> list[Operation]:
-    if harness not in ("all", "pi") or "agents" not in components:
+    if "agents" not in components:
         return []
-    return [
-        Operation("render", Link(GENERATED / "pi/agents", ROOT / "content/agents", "generated-agents"), "render Pi agents"),
-        Operation("npm ci", Link(ROOT / "node_modules", ROOT / "package-lock.json", "npm-dependencies"), "install npm dependencies"),
-        Operation("pi install", Link(home() / ".pi/agent/settings.json", ROOT, "pi-package"), "register Pi package"),
-    ]
+
+    operations: list[Operation] = []
+    if harness in ("all", "claude"):
+        operations.append(
+            Operation("render", Link(GENERATED / "claude/agents", ROOT / "content/agents", "generated-agents"), "render Claude agents")
+        )
+    if harness in ("all", "pi"):
+        operations.extend((
+            Operation("render", Link(GENERATED / "pi/agents", ROOT / "content/agents", "generated-agents"), "render Pi agents"),
+            Operation("npm ci", Link(ROOT / "node_modules", ROOT / "package-lock.json", "npm-dependencies"), "install npm dependencies"),
+            Operation("pi install", Link(home() / ".pi/agent/settings.json", ROOT, "pi-package"), "register Pi package"),
+        ))
+    return operations
 
 
 def print_plan(operations: list[Operation]) -> None:
