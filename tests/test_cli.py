@@ -50,7 +50,7 @@ class HarnessKitTests(unittest.TestCase):
     def test_preview_is_read_only(self) -> None:
         result = invoke(self.path, "preview")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("create", result.stdout)
+        self.assertIn("[CREATE]", result.stdout)
         self.assertFalse((self.path / "commands").exists())
         self.assertFalse((self.path / "home").exists())
 
@@ -75,7 +75,7 @@ class HarnessKitTests(unittest.TestCase):
 
         second = invoke(self.path, "install")
         self.assertEqual(second.returncode, 0, second.stderr)
-        self.assertIn("noop", second.stdout)
+        self.assertIn("[NOOP]", second.stdout)
 
     def test_skills_only_installs_only_skill_links(self) -> None:
         preview = invoke(self.path, "preview", "--component", "skills")
@@ -214,7 +214,7 @@ class HarnessKitTests(unittest.TestCase):
         destination.symlink_to(foreign)
         result = invoke(self.path, "install", "--harness", "claude", "--skip", str(destination))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("skip", result.stdout)
+        self.assertIn("[SKIP]", result.stdout)
         self.assertEqual(destination.resolve(), foreign.resolve())
         self.assertTrue((self.path / "home/.claude/agents/scout.md").is_symlink())
         state = json.loads((self.path / "state/harness-kit/state.json").read_text())
@@ -281,10 +281,10 @@ class HarnessKitTests(unittest.TestCase):
     def test_pi_agents_preview_lists_render_and_registration_work(self) -> None:
         result = invoke(self.path, "preview", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("render", result.stdout)
+        self.assertIn("[RENDER]", result.stdout)
         self.assertIn(str(ROOT / ".generated/pi/agents"), result.stdout)
-        self.assertIn("npm ci", result.stdout)
-        self.assertIn("pi install", result.stdout)
+        self.assertIn("[NPM CI]", result.stdout)
+        self.assertIn("[PI INSTALL]", result.stdout)
         self.assertIn(str(ROOT), result.stdout)
 
     def test_agent_install_creates_missing_generated_parent(self) -> None:
@@ -327,12 +327,12 @@ class HarnessKitTests(unittest.TestCase):
 
         blocked = invoke(self.path, "preview", "--harness", "pi", "--component", "agents")
         self.assertEqual(blocked.returncode, 2)
-        self.assertIn("conflict", blocked.stdout)
+        self.assertIn("[CONFLICT]", blocked.stdout)
         self.assertIn("legacy pi-kit package is registered", blocked.stdout)
 
         adopted = invoke(self.path, "install", "--harness", "pi", "--component", "agents", "--dry-run", "--adopt-legacy")
         self.assertEqual(adopted.returncode, 0, adopted.stderr)
-        self.assertIn("pi remove", adopted.stdout)
+        self.assertIn("[PI REMOVE]", adopted.stdout)
         self.assertIn(str(home / "dev/pi-kit"), adopted.stdout)
         self.assertFalse((self.path / "commands").exists())
 

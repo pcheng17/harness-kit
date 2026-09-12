@@ -368,7 +368,8 @@ def agent_execution_plan(harness: str, components: frozenset[str], adopt_legacy:
 def print_plan(operations: list[Operation]) -> None:
     for operation in operations:
         suffix = f" ({operation.detail})" if operation.detail else ""
-        print(f"{operation.action:10} {operation.link.destination} -> {operation.link.target}{suffix}")
+        action = f"[{operation.action.upper()}]"
+        print(f"{action:12} {operation.link.destination} -> {operation.link.target}{suffix}")
 
 
 def verify_generated(files: dict[Path, str], harness: str) -> bool:
