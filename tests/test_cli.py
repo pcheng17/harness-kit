@@ -210,6 +210,50 @@ class HarnessKitTests(unittest.TestCase):
         self.assertTrue((home / ".claude/CLAUDE.md").is_symlink())
         self.assertFalse((home / ".claude/agents/scout.md").exists())
 
+    def test_install_rejects_forged_unrelated_owned_destination_before_commands_or_mutation(self) -> None:
+        settings = self.path / "home/.pi/agent/settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text('{"protected": true}\n')
+        state = self.path / "xdg/state/harness-kit/state.json"
+        state.parent.mkdir(parents=True)
+        state.write_text(json.dumps({"links": {str(settings): str(self.project / "content/instructions/AGENTS.md")}}))
+
+        result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "instructions")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("invalid ownership state", result.stderr)
+        self.assertEqual(settings.read_text(), '{"protected": true}\n')
+        self.assertFalse((self.path / "commands").exists())
+        self.assertFalse((self.path / "home/.claude/CLAUDE.md").exists())
+
+    def test_install_rejects_malformed_owned_destinations_before_mutation(self) -> None:
+        home = self.path / "home"
+        malformed = (
+            "relative/.claude/CLAUDE.md",
+            str(home / ".claude/agents/../CLAUDE.md"),
+            f"{home}/.claude/./CLAUDE.md",
+            f"{home}/.claude//CLAUDE.md",
+            f"{home}-other/.claude/CLAUDE.md",
+            "",
+            str(home / ".claude/CLAUDE.md") + "\0suffix",
+            str(home / ".claude/agents/stale/ghost.md"),
+            str(home / ".claude/skills/code-review/extra"),
+            str(home / ".claude/agents/Scout.md"),
+            str(home / ".claude/agents/scout.txt"),
+            str(home / ".agents/skills/.code-review"),
+        )
+        state = self.path / "xdg/state/harness-kit/state.json"
+        state.parent.mkdir(parents=True)
+        target = str(self.project / "content/instructions/AGENTS.md")
+        for destination in malformed:
+            with self.subTest(destination=repr(destination)):
+                state.write_text(json.dumps({"links": {destination: target}}))
+                result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "instructions")
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("invalid ownership state", result.stderr)
+                self.assertFalse((self.path / "commands").exists())
+                self.assertFalse((home / ".claude/CLAUDE.md").exists())
+
     def test_component_scoped_install_preserves_unselected_owned_links(self) -> None:
         self.assertEqual(invoke(self.sandbox, "install").returncode, 0)
         second = invoke(self.sandbox, "install", "--component", "skills")
