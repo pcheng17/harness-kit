@@ -30,7 +30,6 @@ class Sandbox:
             self.project,
             self.root / "home",
             self.root / "codex-home",
-            self.root / "xdg/state",
             self.root / "xdg/config",
             self.root / "xdg/cache",
             self.root / "xdg/data",
@@ -81,13 +80,13 @@ def temporary_sandbox() -> Iterator[Sandbox]:
 
 
 _MUTATION_ENVIRONMENT_PATHS = frozenset((
-    "HOME", "CODEX_HOME", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+    "HOME", "CODEX_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
     "TMPDIR", "NPM_CONFIG_USERCONFIG", "NPM_CONFIG_CACHE", "NPM_CONFIG_PREFIX", "PI_HOME",
     "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "HARNESS_LOG", "PATH", "PYTHONPATH",
 ))
 
 
-def subprocess_environment(sandbox: Sandbox, environment_override: dict[str, str | None] | None, allow_unsafe_validation: bool = False) -> dict[str, str]:
+def subprocess_environment(sandbox: Sandbox, environment_override: dict[str, str | None] | None) -> dict[str, str]:
     sandbox.assert_contained()
     fake_bin = sandbox.root / "bin"
     fake_bin.mkdir(exist_ok=True)
@@ -97,7 +96,7 @@ def subprocess_environment(sandbox: Sandbox, environment_override: dict[str, str
         command.chmod(0o755)
     environment = {
         "HOME": str(sandbox.root / "home"), "CODEX_HOME": str(sandbox.root / "codex-home"),
-        "XDG_STATE_HOME": str(sandbox.root / "xdg/state"), "XDG_CONFIG_HOME": str(sandbox.root / "xdg/config"),
+        "XDG_CONFIG_HOME": str(sandbox.root / "xdg/config"),
         "XDG_CACHE_HOME": str(sandbox.root / "xdg/cache"), "XDG_DATA_HOME": str(sandbox.root / "xdg/data"),
         "TMPDIR": str(sandbox.root / "tmp"), "NPM_CONFIG_USERCONFIG": str(sandbox.root / "npm/config/npmrc"),
         "NPM_CONFIG_CACHE": str(sandbox.root / "npm/cache"), "NPM_CONFIG_PREFIX": str(sandbox.root / "npm/prefix"),
@@ -110,7 +109,7 @@ def subprocess_environment(sandbox: Sandbox, environment_override: dict[str, str
     if hook.exists():
         environment["HARNESS_SHIM_HOOK"] = str(hook)
     for key, value in (environment_override or {}).items():
-        if key in _MUTATION_ENVIRONMENT_PATHS and not allow_unsafe_validation:
+        if key in _MUTATION_ENVIRONMENT_PATHS:
             if value is None:
                 raise RuntimeError(f"mutating subprocess environment removes sandbox boundary: {key}")
             candidate = Path(value)
@@ -132,18 +131,6 @@ def invoke(sandbox: Sandbox, *arguments: str, environment_override: dict[str, st
     return subprocess.run([sys.executable, "-m", "harness_kit.cli", *arguments], cwd=cwd, env=environment, text=True, capture_output=True)
 
 
-def invoke_validation(sandbox: Sandbox, environment_override: dict[str, str | None] | None = None) -> subprocess.CompletedProcess[str]:
-    """Run state-root validation only; it never invokes the mutating CLI."""
-    environment = subprocess_environment(sandbox, environment_override, allow_unsafe_validation=True)
-    return subprocess.run(
-        [sys.executable, "-c", "from harness_kit.cli import state_path; print(state_path())"],
-        cwd=sandbox.project,
-        env=environment,
-        text=True,
-        capture_output=True,
-    )
-
-
 class HarnessKitTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -154,6 +141,44 @@ class HarnessKitTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def test_fresh_install_creates_links_without_state(self) -> None:
+        result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "instructions")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.path / "home/.claude/CLAUDE.md").is_symlink())
+        self.assertFalse((self.path / "home/.local/state/harness-kit").exists())
+
+    def test_malformed_historical_state_is_ignored_and_preserved(self) -> None:
+        historical = self.path / "home/.local/state/harness-kit/state.json"
+        historical.parent.mkdir(parents=True)
+        original = "not json\n"
+        historical.write_text(original)
+        result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "instructions")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(historical.read_text(), original)
+
+    def test_historical_state_symlink_is_ignored_and_preserved(self) -> None:
+        historical_root = self.path / "home/.local/state/harness-kit"
+        historical_root.mkdir(parents=True)
+        target = self.path / "historical-target"
+        target.write_text("protected\n")
+        historical = historical_root / "state.json"
+        historical.symlink_to(target)
+        result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "instructions")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(historical.is_symlink())
+        self.assertEqual(historical.resolve(), target)
+
+    def test_symlinked_historical_state_ancestor_is_ignored_and_preserved(self) -> None:
+        state_root = self.path / "home/.local/state"
+        outside = self.path / "historical"
+        outside.mkdir()
+        state_root.parent.mkdir(parents=True)
+        state_root.symlink_to(outside, target_is_directory=True)
+        result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "instructions")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(state_root.is_symlink())
+        self.assertEqual(state_root.resolve(), outside)
+
     def test_preview_is_read_only(self) -> None:
         result = invoke(self.sandbox, "preview")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -162,107 +187,13 @@ class HarnessKitTests(unittest.TestCase):
         self.assertFalse((self.path / "commands").exists())
         self.assertFalse((self.path / "home").exists())
 
-    def test_invalid_state_roots_fail_in_non_mutating_validation_subprocess(self) -> None:
-        invalid_roots = ("", "relative/state", "/")
-        for root in invalid_roots:
-            with self.subTest(root=repr(root)), temporary_sandbox() as sandbox:
-                result = invoke_validation(sandbox, {"XDG_STATE_HOME": root})
-                self.assertNotEqual(result.returncode, 0, result.stderr)
-                self.assertIn("XDG_STATE_HOME", result.stderr)
-                self.assertFalse((sandbox.root / "commands").exists())
-
-        with temporary_sandbox() as sandbox:
-            result = invoke_validation(sandbox, {"XDG_STATE_HOME": None, "HOME": "/"})
-            self.assertNotEqual(result.returncode, 0, result.stderr)
-            self.assertIn("HOME", result.stderr)
-            self.assertFalse((sandbox.root / "commands").exists())
-
     def test_mutating_subprocess_rejects_unsafe_path_overrides(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "escapes sandbox"):
-            invoke(self.sandbox, "install", environment_override={"XDG_STATE_HOME": "/"})
+            invoke(self.sandbox, "install", environment_override={"HOME": "/"})
         with self.assertRaisesRegex(RuntimeError, "removes sandbox boundary"):
             invoke(self.sandbox, "install", environment_override={"PATH": None})
 
-    def test_state_ancestors_and_state_file_fail_closed_before_external_commands(self) -> None:
-        cases = ("root-link", "root-file", "kit-link", "kit-file", "state-link", "state-file")
-        for case in cases:
-            with self.subTest(case=case), temporary_sandbox() as sandbox:
-                root = sandbox.root / "xdg/state"
-                state_directory = root / "harness-kit"
-                outside = sandbox.root / "outside"
-                outside.mkdir()
-                if case == "root-link":
-                    root.parent.mkdir(parents=True)
-                    root.symlink_to(outside, target_is_directory=True)
-                elif case == "root-file":
-                    root.parent.mkdir(parents=True)
-                    root.write_text("not a directory\n")
-                elif case == "kit-link":
-                    root.mkdir(parents=True)
-                    state_directory.symlink_to(outside, target_is_directory=True)
-                elif case == "kit-file":
-                    root.mkdir(parents=True)
-                    state_directory.write_text("not a directory\n")
-                else:
-                    state_directory.mkdir(parents=True)
-                    state = state_directory / "state.json"
-                    if case == "state-link":
-                        state.symlink_to(outside / "state.json")
-                    else:
-                        state.mkdir()
-                result = invoke(sandbox, "install")
-                self.assertEqual(result.returncode, 2, result.stderr)
-                self.assertIn("state", result.stderr)
-                self.assertFalse((sandbox.root / "commands").exists())
-
-    def test_state_write_does_not_follow_predictable_temporary_link(self) -> None:
-        state_directory = self.path / "xdg/state/harness-kit"
-        state_directory.mkdir(parents=True)
-        canary = self.path / "canary"
-        canary.write_text("protected\n")
-        (state_directory / "state.tmp").symlink_to(canary)
-
-        result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "instructions")
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(canary.read_text(), "protected\n")
-        self.assertTrue((state_directory / "state.tmp").is_symlink())
-        self.assertTrue((state_directory / "state.json").is_file())
-
-    def test_state_write_refuses_substituted_temporary_and_preserves_it(self) -> None:
-        state_directory = self.path / "xdg/state/harness-kit"
-        state_directory.mkdir(parents=True)
-        canary = self.path / "canary"
-        canary.write_text("protected\n")
-        # sitecustomize is copied-test subprocess instrumentation, not a CLI hook.
-        (self.project / "src/sitecustomize.py").write_text(
-            "import os\n"
-            "original_open = os.open\n"
-            "def substituted_open(path, flags, mode=0o777, *, dir_fd=None):\n"
-            "    descriptor = original_open(path, flags, mode, dir_fd=dir_fd)\n"
-            "    if isinstance(path, str) and path.startswith('.state-') and flags & os.O_CREAT:\n"
-            "        os.unlink(path, dir_fd=dir_fd)\n"
-            "        os.symlink(os.environ['STATE_TEMP_CANARY'], path, dir_fd=dir_fd)\n"
-            "    return descriptor\n"
-            "os.open = substituted_open\n"
-        )
-
-        result = invoke(
-            self.sandbox,
-            "install", "--harness", "claude", "--component", "instructions",
-            environment_override={"STATE_TEMP_CANARY": str(canary)},
-        )
-
-        self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("temporary was substituted", result.stderr)
-        self.assertEqual(canary.read_text(), "protected\n")
-        leftovers = list(state_directory.glob(".state-*.tmp"))
-        self.assertEqual(len(leftovers), 1)
-        self.assertTrue(leftovers[0].is_symlink())
-        self.assertEqual(leftovers[0].resolve(), canary)
-        self.assertFalse((state_directory / "state.json").exists())
-
-    def test_install_is_idempotent_and_owns_links(self) -> None:
+    def test_install_is_stateless_and_idempotent(self) -> None:
         first = invoke(self.sandbox, "install")
         self.assertEqual(first.returncode, 0, first.stderr)
         home = self.path / "home"
@@ -275,8 +206,6 @@ class HarnessKitTests(unittest.TestCase):
         commands = (self.path / "commands").read_text().splitlines()
         self.assertEqual(len(commands), 2)
         self.assertTrue(all(line.startswith(f"{self.project}|") for line in commands), commands)
-        state = json.loads((self.path / "xdg/state/harness-kit/state.json").read_text())
-        self.assertIn(str(home.resolve() / ".pi/agent/AGENTS.md"), state["links"])
         second = invoke(self.sandbox, "install")
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertIn("[NOOP]", second.stdout)
@@ -419,24 +348,19 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(destination.resolve(), foreign)
         self.assertEqual(foreign.read_text(), "foreign\n")
 
-    def test_install_conflicts_when_owned_link_target_changes(self) -> None:
+    def test_install_conflicts_when_existing_link_target_differs(self) -> None:
         destination = self.path / "home/.agents/AGENTS.md"
         target_a = self.path / "target-a"
         target_b = self.project / "content/instructions/AGENTS.md"
         target_a.write_text("target A\n")
         destination.parent.mkdir(parents=True)
         destination.symlink_to(target_a)
-        state = self.path / "xdg/state/harness-kit/state.json"
-        state.parent.mkdir(parents=True)
-        original_state = json.dumps({"links": {str(destination): str(target_a)}}) + "\n"
-        state.write_text(original_state)
         original_a = target_a.read_text()
 
         preview = invoke(self.sandbox, "preview")
         self.assertEqual(preview.returncode, 2, preview.stderr)
         self.assertIn("[CONFLICT]", preview.stdout)
         self.assertNotIn("[UPDATE]", preview.stdout)
-        self.assertEqual(state.read_text(), original_state)
 
         result = invoke(self.sandbox, "install")
 
@@ -447,7 +371,6 @@ class HarnessKitTests(unittest.TestCase):
         self.assertTrue(destination.is_symlink())
         self.assertEqual(destination.resolve(), target_a.resolve())
         self.assertEqual(target_a.read_text(), original_a)
-        self.assertEqual(state.read_text(), original_state)
         self.assertNotEqual(destination.resolve(), target_b.resolve())
 
     def test_stale_deployed_skill_link_is_preserved_when_source_leaves_catalog(self) -> None:
@@ -475,62 +398,14 @@ class HarnessKitTests(unittest.TestCase):
         self.assertTrue(destination.is_symlink())
         self.assertEqual(os.readlink(destination), str(old_target))
 
-        state = json.loads((self.path / "xdg/state/harness-kit/state.json").read_text())
-        self.assertIn(str(destination), state["links"])
 
-    def test_install_rejects_forged_unrelated_owned_destination_before_commands_or_mutation(self) -> None:
-        settings = self.path / "home/.pi/agent/settings.json"
-        settings.parent.mkdir(parents=True)
-        settings.write_text('{"protected": true}\n')
-        state = self.path / "xdg/state/harness-kit/state.json"
-        state.parent.mkdir(parents=True)
-        state.write_text(json.dumps({"links": {str(settings): str(self.project / "content/instructions/AGENTS.md")}}))
-
-        result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "instructions")
-
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("invalid ownership state", result.stderr)
-        self.assertEqual(settings.read_text(), '{"protected": true}\n')
-        self.assertFalse((self.path / "commands").exists())
-        self.assertFalse((self.path / "home/.claude/CLAUDE.md").exists())
-
-    def test_install_rejects_malformed_owned_destinations_before_mutation(self) -> None:
-        home = self.path / "home"
-        malformed = (
-            "relative/.claude/CLAUDE.md",
-            str(home / ".claude/agents/../CLAUDE.md"),
-            f"{home}/.claude/./CLAUDE.md",
-            f"{home}/.claude//CLAUDE.md",
-            f"{home}-other/.claude/CLAUDE.md",
-            "",
-            str(home / ".claude/CLAUDE.md") + "\0suffix",
-            str(home / ".claude/agents/stale/ghost.md"),
-            str(home / ".claude/skills/code-review/extra"),
-            str(home / ".claude/agents/Scout.md"),
-            str(home / ".claude/agents/scout.txt"),
-            str(home / ".agents/skills/.code-review"),
-        )
-        state = self.path / "xdg/state/harness-kit/state.json"
-        state.parent.mkdir(parents=True)
-        target = str(self.project / "content/instructions/AGENTS.md")
-        for destination in malformed:
-            with self.subTest(destination=repr(destination)):
-                state.write_text(json.dumps({"links": {destination: target}}))
-                result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "instructions")
-                self.assertEqual(result.returncode, 2)
-                self.assertIn("invalid ownership state", result.stderr)
-                self.assertFalse((self.path / "commands").exists())
-                self.assertFalse((home / ".claude/CLAUDE.md").exists())
-
-    def test_component_scoped_install_preserves_unselected_owned_links(self) -> None:
+    def test_component_scoped_install_preserves_unselected_links(self) -> None:
         self.assertEqual(invoke(self.sandbox, "install").returncode, 0)
         second = invoke(self.sandbox, "install", "--component", "skills")
         self.assertEqual(second.returncode, 0, second.stderr)
         agent = self.path / "home/.claude/agents/scout.md"
         self.assertTrue(agent.is_symlink())
         self.assertTrue((self.path / "home/.claude/CLAUDE.md").is_symlink())
-        state = json.loads((self.path / "xdg/state/harness-kit/state.json").read_text())
-        self.assertIn(str(agent.parent.resolve() / agent.name), state["links"])
 
     def test_pi_agents_default_to_medium_thinking(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "pi")
@@ -547,8 +422,6 @@ class HarnessKitTests(unittest.TestCase):
         claude_agent = self.path / "home/.claude/agents/scout.md"
         self.assertTrue(claude_agent.is_symlink())
         self.assertEqual((self.path / "home/.claude/CLAUDE.md").resolve(), self.project / "content/instructions/AGENTS.md")
-        state = json.loads((self.path / "xdg/state/harness-kit/state.json").read_text())
-        self.assertIn(str(claude_agent.parent.resolve() / claude_agent.name), state["links"])
 
     def test_scoped_install_deploys_only_requested_common_locations(self) -> None:
         claude = invoke(self.sandbox, "install", "--harness", "claude")
@@ -564,15 +437,13 @@ class HarnessKitTests(unittest.TestCase):
             self.assertTrue((sandbox.root / "home/.agents/AGENTS.md").is_symlink())
             self.assertTrue((sandbox.root / "home/.pi/agent/AGENTS.md").is_symlink())
 
-    def test_install_does_not_claim_matching_unmanaged_instruction_link(self) -> None:
+    def test_matching_link_is_stateless_noop(self) -> None:
         destination = self.path / "home/.agents/AGENTS.md"
         destination.parent.mkdir(parents=True)
         destination.symlink_to(self.project / "content/instructions/AGENTS.md")
         result = invoke(self.sandbox, "install", "--harness", "pi")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(destination.resolve(), self.project / "content/instructions/AGENTS.md")
-        state = json.loads((self.path / "xdg/state/harness-kit/state.json").read_text())
-        self.assertNotIn(str(destination.parent.resolve() / destination.name), state["links"])
 
     def test_install_refuses_foreign_common_instruction_destinations(self) -> None:
         for harness, relative_destination in (("claude", ".claude/CLAUDE.md"), ("pi", ".agents/AGENTS.md"), ("pi", ".pi/agent/AGENTS.md")):
@@ -597,7 +468,6 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn("[CONFLICT]", result.stdout)
         self.assertEqual(destination.resolve(), foreign.resolve())
         self.assertFalse((self.path / "home/.claude/agents/scout.md").exists())
-        self.assertFalse((self.path / "xdg/state/harness-kit/state.json").exists())
         self.assertFalse((self.project / ".generated").exists())
 
     def test_legacy_pi_instruction_link_conflicts_and_is_preserved(self) -> None:
@@ -616,7 +486,6 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(os.readlink(destination), str(legacy))
         self.assertEqual(legacy.read_text(), "legacy\n")
         self.assertFalse((self.path / "commands").exists())
-        self.assertFalse((self.path / "xdg/state/harness-kit/state.json").exists())
         self.assertFalse((self.project / ".generated").exists())
 
     def test_legacy_skill_link_conflicts_and_is_preserved(self) -> None:
@@ -635,7 +504,6 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn("[CONFLICT]", result.stdout)
         self.assertEqual(os.readlink(destination), str(legacy))
         self.assertEqual(target_file.read_text(), "legacy skill\n")
-        self.assertFalse((self.path / "xdg/state/harness-kit/state.json").exists())
 
     def test_install_rejects_adopt_legacy_argument(self) -> None:
         result = invoke(self.sandbox, "install", "--adopt-legacy")
