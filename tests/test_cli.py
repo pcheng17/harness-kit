@@ -419,32 +419,36 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(destination.resolve(), foreign)
         self.assertEqual(foreign.read_text(), "foreign\n")
 
-    def test_install_revalidates_final_entry_before_unlink(self) -> None:
-        self.assertEqual(invoke(self.sandbox, "install", "--harness", "pi").returncode, 0)
+    def test_install_conflicts_when_owned_link_target_changes(self) -> None:
         destination = self.path / "home/.agents/AGENTS.md"
-        old_target = self.path / "old-target"
-        old_target.write_text("old\n")
-        destination.unlink()
-        destination.symlink_to(old_target)
+        target_a = self.path / "target-a"
+        target_b = self.project / "content/instructions/AGENTS.md"
+        target_a.write_text("target A\n")
+        destination.parent.mkdir(parents=True)
+        destination.symlink_to(target_a)
         state = self.path / "xdg/state/harness-kit/state.json"
-        state_data = json.loads(state.read_text())
-        state_data["links"][str(destination)] = str(old_target)
-        state.write_text(json.dumps(state_data))
-        foreign = self.path / "foreign"
-        foreign.write_text("foreign\n")
-        hook = self.path / "shim-hook"
-        hook.write_text(
-            "#!/bin/sh\n"
-            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/rm -f \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
-            % (self.path, destination, foreign, destination)
-        )
-        hook.chmod(0o755)
-        result = invoke(self.sandbox, "install", "--harness", "pi")
+        state.parent.mkdir(parents=True)
+        original_state = json.dumps({"links": {str(destination): str(target_a)}}) + "\n"
+        state.write_text(original_state)
+        original_a = target_a.read_text()
+
+        preview = invoke(self.sandbox, "preview")
+        self.assertEqual(preview.returncode, 2, preview.stderr)
+        self.assertIn("[CONFLICT]", preview.stdout)
+        self.assertNotIn("[UPDATE]", preview.stdout)
+        self.assertEqual(state.read_text(), original_state)
+
+        result = invoke(self.sandbox, "install")
+
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("substituted destination", result.stderr)
+        self.assertIn("[CONFLICT]", result.stdout)
+        self.assertNotIn("[UPDATE]", result.stdout)
+        self.assertFalse((self.path / "commands").exists())
         self.assertTrue(destination.is_symlink())
-        self.assertEqual(destination.resolve(), foreign)
-        self.assertEqual(foreign.read_text(), "foreign\n")
+        self.assertEqual(destination.resolve(), target_a.resolve())
+        self.assertEqual(target_a.read_text(), original_a)
+        self.assertEqual(state.read_text(), original_state)
+        self.assertNotEqual(destination.resolve(), target_b.resolve())
 
     def test_install_revalidates_stale_remove_before_unlink(self) -> None:
         self.assertEqual(invoke(self.sandbox, "install", "--harness", "pi").returncode, 0)
