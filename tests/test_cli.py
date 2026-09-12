@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def invoke(tmp_path: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     home = tmp_path / "home"
+    real_home = Path(os.path.expanduser("~")).resolve()
+    assert home.resolve() != real_home, "test HOME must not be the real HOME"
     state = tmp_path / "state"
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(exist_ok=True)
@@ -213,7 +215,7 @@ class HarnessKitTests(unittest.TestCase):
         result = invoke(self.path, "install", "--harness", "claude", "--skip", str(destination))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("skip", result.stdout)
-        self.assertEqual(destination.resolve(), foreign)
+        self.assertEqual(destination.resolve(), foreign.resolve())
         self.assertTrue((self.path / "home/.claude/agents/scout.md").is_symlink())
         state = json.loads((self.path / "state/harness-kit/state.json").read_text())
         self.assertNotIn(str(destination.resolve()), state["links"])

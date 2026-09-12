@@ -52,7 +52,25 @@ def home() -> Path:
     value = os.environ.get("HOME")
     if not value:
         raise KitError("HOME is not set")
-    return Path(value).expanduser().resolve()
+    resolved = Path(value).expanduser().resolve()
+    if len(resolved.parts) < 3:
+        raise KitError(f"HOME resolves to a suspiciously shallow path: {resolved}")
+    return resolved
+
+
+def canonical_destination(path: Path) -> Path:
+    """Resolve symlinked ancestor directories without following the final
+    component itself, matching how Link.destination paths are built from
+    home()."""
+    absolute = path.expanduser().absolute()
+    return absolute.parent.resolve() / absolute.name
+
+
+def require_relative_to(path: Path, root: Path) -> Path:
+    resolved = path.resolve()
+    if not resolved.is_relative_to(root.resolve()):
+        raise KitError(f"refusing destructive operation outside {root}: {resolved}")
+    return resolved
 
 
 def legacy_skills() -> Path:
@@ -194,11 +212,11 @@ def materialize(files: dict[Path, str], harness: str) -> None:
                     generated.parent.mkdir(parents=True, exist_ok=True)
                     generated.write_text(content)
             if destination.exists():
-                shutil.rmtree(destination)
+                shutil.rmtree(require_relative_to(destination, ROOT))
             destination.parent.mkdir(parents=True, exist_ok=True)
             temporary.rename(destination)
         finally:
-            shutil.rmtree(temporary_root, ignore_errors=True)
+            shutil.rmtree(require_relative_to(temporary_root, ROOT), ignore_errors=True)
 
 
 def load_state() -> dict[str, str]:
@@ -474,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
             print_plan(operations)
             return 2 if any(operation.action == "conflict" for operation in operations) else 0
         if args.command == "install":
-            skip = frozenset(Path(value).expanduser().absolute() for value in args.skip or ())
+            skip = frozenset(canonical_destination(Path(value)) for value in args.skip or ())
             return install(args.harness, components, args.dry_run, args.adopt_legacy, skip)
         return check(args.harness, components)
     except KitError as error:
