@@ -47,6 +47,7 @@ class Operation:
     action: str
     link: Link
     detail: str = ""
+    expected_target: Path | None = None
 
 
 def home() -> Path:
@@ -296,10 +297,42 @@ def desired_links(harness: str, agents: list[Agent], components: frozenset[str])
     return links
 
 
+def validate_managed_ancestors(destination: Path) -> None:
+    """Reject existing managed parents that could redirect a link mutation."""
+    user_home = home()
+    try:
+        relative_parent = destination.parent.relative_to(user_home)
+    except ValueError as error:
+        raise KitError(f"managed destination is outside HOME: {destination}") from error
+    parent = user_home
+    if parent.exists() and not parent.is_dir():
+        raise KitError(f"refusing managed destination with non-directory ancestor: {parent}")
+    for part in relative_parent.parts:
+        parent /= part
+        if parent.is_symlink():
+            raise KitError(f"refusing managed destination with symlinked ancestor: {parent}")
+        if parent.exists() and not parent.is_dir():
+            raise KitError(f"refusing managed destination with non-directory ancestor: {parent}")
+
+
 def link_target(path: Path) -> Path | None:
     if not path.is_symlink():
         return None
     return (path.parent / os.readlink(path)).resolve()
+
+
+def validate_operation_preconditions(operation: Operation) -> None:
+    """Recheck the plan's filesystem observations immediately before mutation."""
+    path = operation.link.destination
+    validate_managed_ancestors(path)
+    current = link_target(path)
+    exists = path.exists() or path.is_symlink()
+    if operation.action == "create":
+        if exists:
+            raise KitError(f"refusing to create substituted destination: {path}")
+    elif operation.action in {"update", "adopt", "remove"}:
+        if current != operation.expected_target:
+            raise KitError(f"refusing to mutate substituted destination: {path}")
 
 
 def is_legacy_target(link: Link, current: Path | None) -> bool:
@@ -337,10 +370,13 @@ def preview(
     skip: frozenset[Path] = frozenset(),
 ) -> tuple[list[Operation], dict[str, str]]:
     state = load_state()
+    for destination in state:
+        validate_managed_ancestors(Path(destination))
     desired = desired_links(harness, agents, components)
     desired_by_destination = {str(link.destination): link for link in desired}
     operations: list[Operation] = []
     for link in desired:
+        validate_managed_ancestors(link.destination)
         destination = str(link.destination)
         if link.destination.absolute() in skip:
             operations.append(Operation("skip", link, "explicitly skipped"))
@@ -351,9 +387,9 @@ def preview(
         elif current == link.target.resolve():
             operations.append(Operation("noop", link))
         elif destination in state and current == Path(state[destination]).resolve():
-            operations.append(Operation("update", link, "previously owned target"))
+            operations.append(Operation("update", link, "previously owned target", current))
         elif adopt_legacy and is_legacy_target(link, current):
-            operations.append(Operation("adopt", link, "recognized legacy target"))
+            operations.append(Operation("adopt", link, "recognized legacy target", current))
         else:
             operations.append(Operation("conflict", link, "unmanaged destination"))
     next_state = dict(state)
@@ -362,8 +398,9 @@ def preview(
             continue
         path = Path(destination)
         next_state.pop(destination, None)
-        if link_target(path) == Path(old_target).resolve():
-            operations.append(Operation("remove", Link(path, Path(old_target), "stale")))
+        current = link_target(path)
+        if current == Path(old_target).resolve():
+            operations.append(Operation("remove", Link(path, Path(old_target), "stale"), expected_target=current))
     operations_by_destination = {str(operation.link.destination): operation for operation in operations}
     for link in desired:
         destination = str(link.destination)
@@ -456,8 +493,10 @@ def install(harness: str, components: frozenset[str], dry_run: bool, adopt_legac
     for operation in operations:
         path = operation.link.destination
         if operation.action == "remove":
+            validate_operation_preconditions(operation)
             path.unlink()
-        elif operation.action in ("create", "update", "adopt"): 
+        elif operation.action in ("create", "update", "adopt"):
+            validate_operation_preconditions(operation)
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.is_symlink() or path.exists():
                 path.unlink()

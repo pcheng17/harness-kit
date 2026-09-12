@@ -87,8 +87,9 @@ def invoke(sandbox: Sandbox, *arguments: str) -> subprocess.CompletedProcess[str
     fake_bin.mkdir(exist_ok=True)
     for name in ("npm", "pi"):
         command = fake_bin / name
-        command.write_text("#!/bin/sh\nprintf '%s|%s %s\\n' \"$PWD\" \"$0\" \"$*\" >> \"$HARNESS_LOG\"\n")
+        command.write_text("#!/bin/sh\nprintf '%s|%s %s\\n' \"$PWD\" \"$0\" \"$*\" >> \"$HARNESS_LOG\"\n[ -z \"${HARNESS_SHIM_HOOK:-}\" ] || \"$HARNESS_SHIM_HOOK\" \"$0\"\n")
         command.chmod(0o755)
+    hook = sandbox.root / "shim-hook"
     environment = {
         "HOME": str(sandbox.root / "home"),
         "CODEX_HOME": str(sandbox.root / "codex-home"),
@@ -110,6 +111,8 @@ def invoke(sandbox: Sandbox, *arguments: str) -> subprocess.CompletedProcess[str
         "PYTHONNOUSERSITE": "1",
         "HARNESS_LOG": str(sandbox.root / "commands"),
     }
+    if hook.exists():
+        environment["HARNESS_SHIM_HOOK"] = str(hook)
     cwd = sandbox.project.resolve()
     if not cwd.is_relative_to(sandbox.root.resolve()) or cwd == SOURCE_ROOT.resolve():
         raise RuntimeError("CLI subprocess must run from sandbox project")
@@ -209,6 +212,145 @@ class HarnessKitTests(unittest.TestCase):
         self.assertTrue((home / ".claude/skills/code-review").is_symlink())
         self.assertTrue((home / ".claude/CLAUDE.md").is_symlink())
         self.assertFalse((home / ".claude/agents/scout.md").exists())
+
+    def test_managed_parent_symlinks_fail_closed_for_every_family(self) -> None:
+        families = (
+            (".claude", "claude", "instructions"),
+            (".claude/agents", "claude", "agents"),
+            (".claude/skills", "claude", "skills"),
+            (".agents", "pi", "instructions"),
+            (".agents/skills", "pi", "skills"),
+            (".pi", "pi", "instructions"),
+            (".pi/agent", "pi", "instructions"),
+        )
+        for parent_relative, harness, component in families:
+            with self.subTest(parent=parent_relative), temporary_sandbox() as sandbox:
+                outside = sandbox.root / "outside"
+                canary = outside / "canary"
+                outside.mkdir()
+                canary.write_text("protected\n")
+                parent = sandbox.root / "home" / parent_relative
+                parent.parent.mkdir(parents=True, exist_ok=True)
+                parent.symlink_to(outside, target_is_directory=True)
+                for command in ("preview", "install", "check"):
+                    result = invoke(sandbox, command, "--harness", harness, "--component", component)
+                    self.assertEqual(result.returncode, 2, (command, result.stderr))
+                    self.assertIn("symlinked ancestor", result.stderr)
+                    self.assertEqual(canary.read_text(), "protected\n")
+                    self.assertFalse((sandbox.root / "commands").exists())
+
+    def test_managed_parent_files_fail_closed_for_every_family(self) -> None:
+        families = (".claude", ".claude/agents", ".claude/skills", ".agents", ".agents/skills", ".pi", ".pi/agent")
+        for parent_relative in families:
+            with self.subTest(parent=parent_relative), temporary_sandbox() as sandbox:
+                parent = sandbox.root / "home" / parent_relative
+                parent.parent.mkdir(parents=True, exist_ok=True)
+                parent.write_text("not a directory\n")
+                result = invoke(sandbox, "preview")
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("non-directory ancestor", result.stderr)
+                self.assertFalse((sandbox.root / "commands").exists())
+
+    def test_invalid_parent_blocks_pi_commands_before_install(self) -> None:
+        outside = self.path / "outside"
+        outside.mkdir()
+        canary = outside / "canary"
+        canary.write_text("protected\n")
+        parent = self.path / "home/.agents"
+        parent.parent.mkdir(parents=True)
+        parent.symlink_to(outside, target_is_directory=True)
+        result = invoke(self.sandbox, "install", "--harness", "pi")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(canary.read_text(), "protected\n")
+        self.assertFalse((self.path / "commands").exists())
+
+    def test_install_revalidates_parent_after_npm_race(self) -> None:
+        outside = self.path / "outside"
+        outside.mkdir()
+        canary = outside / "canary"
+        canary.write_text("protected\n")
+        parent = self.path / "home/.agents"
+        parent.parent.mkdir(parents=True)
+        hook = self.path / "shim-hook"
+        hook.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/rm -rf \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
+            % (self.path, parent, outside, parent)
+        )
+        hook.chmod(0o755)
+        result = invoke(self.sandbox, "install", "--harness", "pi")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("symlinked ancestor", result.stderr)
+        self.assertEqual(canary.read_text(), "protected\n")
+        self.assertFalse((outside / "AGENTS.md").exists())
+
+    def test_install_revalidates_create_before_linking(self) -> None:
+        foreign = self.path / "foreign"
+        foreign.write_text("foreign\n")
+        destination = self.path / "home/.agents/AGENTS.md"
+        hook = self.path / "shim-hook"
+        hook.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/mkdir -p \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
+            % (self.path, destination.parent, foreign, destination)
+        )
+        hook.chmod(0o755)
+        result = invoke(self.sandbox, "install", "--harness", "pi")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("substituted destination", result.stderr)
+        self.assertTrue(destination.is_symlink())
+        self.assertEqual(destination.resolve(), foreign)
+        self.assertEqual(foreign.read_text(), "foreign\n")
+
+    def test_install_revalidates_final_entry_before_unlink(self) -> None:
+        self.assertEqual(invoke(self.sandbox, "install", "--harness", "pi").returncode, 0)
+        destination = self.path / "home/.agents/AGENTS.md"
+        old_target = self.path / "old-target"
+        old_target.write_text("old\n")
+        destination.unlink()
+        destination.symlink_to(old_target)
+        state = self.path / "xdg/state/harness-kit/state.json"
+        state_data = json.loads(state.read_text())
+        state_data["links"][str(destination)] = str(old_target)
+        state.write_text(json.dumps(state_data))
+        foreign = self.path / "foreign"
+        foreign.write_text("foreign\n")
+        hook = self.path / "shim-hook"
+        hook.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/rm -f \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
+            % (self.path, destination, foreign, destination)
+        )
+        hook.chmod(0o755)
+        result = invoke(self.sandbox, "install", "--harness", "pi")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("substituted destination", result.stderr)
+        self.assertTrue(destination.is_symlink())
+        self.assertEqual(destination.resolve(), foreign)
+        self.assertEqual(foreign.read_text(), "foreign\n")
+
+    def test_install_revalidates_stale_remove_before_unlink(self) -> None:
+        self.assertEqual(invoke(self.sandbox, "install", "--harness", "pi").returncode, 0)
+        destination = self.path / "home/.agents/skills/dod"
+        old_target = destination.resolve()
+        old_target.rename(self.path / "retired-skill")
+        foreign = self.path / "foreign"
+        foreign.write_text("foreign\n")
+        hook = self.path / "shim-hook"
+        hook.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/rm -f \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
+            % (self.path, destination, foreign, destination)
+        )
+        hook.chmod(0o755)
+
+        result = invoke(self.sandbox, "install", "--harness", "pi")
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("substituted destination", result.stderr)
+        self.assertTrue(destination.is_symlink())
+        self.assertEqual(destination.resolve(), foreign)
+        self.assertEqual(foreign.read_text(), "foreign\n")
 
     def test_install_rejects_forged_unrelated_owned_destination_before_commands_or_mutation(self) -> None:
         settings = self.path / "home/.pi/agent/settings.json"
