@@ -78,14 +78,6 @@ def require_relative_to(path: Path, root: Path) -> Path:
     return resolved
 
 
-def legacy_skills() -> Path:
-    return home() / "dev/skills/skills"
-
-
-def legacy_pi_instructions() -> Path:
-    return home() / "dev/pi-kit/config/pi/AGENTS.md"
-
-
 def state_path() -> Path:
     value = os.environ.get("XDG_STATE_HOME")
     if value is None:
@@ -461,20 +453,9 @@ def validate_operation_preconditions(operation: Operation) -> None:
     if operation.action == "create":
         if exists:
             raise KitError(f"refusing to create substituted destination: {path}")
-    elif operation.action in {"update", "adopt", "remove"}:
+    elif operation.action in {"update", "remove"}:
         if current != operation.expected_target:
             raise KitError(f"refusing to mutate substituted destination: {path}")
-
-
-def is_legacy_target(link: Link, current: Path | None) -> bool:
-    if current is None:
-        return False
-    if link.kind in {"claude-skill", "shared-skill"}:
-        return current == (legacy_skills() / link.target.name).resolve()
-    if link.kind == "common-instructions" and link.destination == home() / ".pi/agent/AGENTS.md":
-        return current == legacy_pi_instructions().resolve()
-    return False
-
 
 def selected_destination(path: Path, harness: str, components: frozenset[str]) -> bool:
     # State is validated before this is called; classify it again rather than
@@ -497,7 +478,6 @@ def preview(
     harness: str,
     agents: list[Agent],
     components: frozenset[str] = COMPONENTS,
-    adopt_legacy: bool = False,
     skip: frozenset[Path] = frozenset(),
 ) -> tuple[list[Operation], dict[str, str]]:
     state = load_state()
@@ -519,8 +499,6 @@ def preview(
             operations.append(Operation("noop", link))
         elif destination in state and current == Path(state[destination]).resolve():
             operations.append(Operation("update", link, "previously owned target", current))
-        elif adopt_legacy and is_legacy_target(link, current):
-            operations.append(Operation("adopt", link, "recognized legacy target", current))
         else:
             operations.append(Operation("conflict", link, "unmanaged destination"))
     next_state = dict(state)
@@ -537,8 +515,8 @@ def preview(
         destination = str(link.destination)
         operation = operations_by_destination[destination]
         # A pre-existing matching symlink may belong to another installer. Leave
-        # it usable, but do not claim it without prior ownership or adoption.
-        if destination in state or operation.action in {"create", "update", "adopt"}:
+        # it usable, but do not claim it without prior ownership.
+        if destination in state or operation.action in {"create", "update"}:
             next_state[destination] = str(link.target.resolve())
     return operations, next_state
 
@@ -582,10 +560,10 @@ def run(command: list[str]) -> None:
         raise KitError(f"external command failed ({error.returncode}): {' '.join(command)}") from error
 
 
-def install(harness: str, components: frozenset[str], dry_run: bool, adopt_legacy: bool, skip: frozenset[Path] = frozenset()) -> int:
+def install(harness: str, components: frozenset[str], dry_run: bool, skip: frozenset[Path] = frozenset()) -> int:
     policy, agents = load_catalog(harness, components)
     files = render(policy, agents, harness) if agents else {}
-    operations, next_state = preview(harness, agents, components, adopt_legacy, skip)
+    operations, next_state = preview(harness, agents, components, skip)
     operations.extend(agent_execution_plan(harness, components))
     print_plan(operations)
     conflicts = [operation for operation in operations if operation.action == "conflict"]
@@ -603,7 +581,7 @@ def install(harness: str, components: frozenset[str], dry_run: bool, adopt_legac
         if operation.action == "remove":
             validate_operation_preconditions(operation)
             path.unlink()
-        elif operation.action in ("create", "update", "adopt"):
+        elif operation.action in ("create", "update"):
             validate_operation_preconditions(operation)
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.is_symlink() or path.exists():
@@ -652,7 +630,6 @@ def main(argv: list[str] | None = None) -> int:
         item.add_argument("--component", action="append", choices=("skills", "agents", "instructions"), help="deploy only this component (repeatable)")
         if command == "install":
             item.add_argument("--dry-run", action="store_true", help="print the plan without applying it")
-            item.add_argument("--adopt-legacy", action="store_true", help="adopt recognized links from the old skills or pi-kit checkouts")
             item.add_argument(
                 "--skip",
                 action="append",
@@ -673,7 +650,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2 if any(operation.action == "conflict" for operation in operations) else 0
         if args.command == "install":
             skip = frozenset(canonical_destination(Path(value)) for value in args.skip or ())
-            return install(args.harness, components, args.dry_run, args.adopt_legacy, skip)
+            return install(args.harness, components, args.dry_run, skip)
         return check(args.harness, components)
     except KitError as error:
         print(f"harness-kit: {error}", file=sys.stderr)
