@@ -79,9 +79,14 @@ def temporary_sandbox() -> Iterator[Sandbox]:
         yield create_sandbox(Path(directory))
 
 
-def invoke(sandbox: Sandbox, *arguments: str) -> subprocess.CompletedProcess[str]:
-    # Containment proof: every directory the test or CLI can mutate is under
-    # this freshly-created TemporaryDirectory, never real HOME or the source.
+_MUTATION_ENVIRONMENT_PATHS = frozenset((
+    "HOME", "CODEX_HOME", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+    "TMPDIR", "NPM_CONFIG_USERCONFIG", "NPM_CONFIG_CACHE", "NPM_CONFIG_PREFIX", "PI_HOME",
+    "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "HARNESS_LOG", "PATH", "PYTHONPATH",
+))
+
+
+def subprocess_environment(sandbox: Sandbox, environment_override: dict[str, str | None] | None, allow_unsafe_validation: bool = False) -> dict[str, str]:
     sandbox.assert_contained()
     fake_bin = sandbox.root / "bin"
     fake_bin.mkdir(exist_ok=True)
@@ -89,38 +94,49 @@ def invoke(sandbox: Sandbox, *arguments: str) -> subprocess.CompletedProcess[str
         command = fake_bin / name
         command.write_text("#!/bin/sh\nprintf '%s|%s %s\\n' \"$PWD\" \"$0\" \"$*\" >> \"$HARNESS_LOG\"\n[ -z \"${HARNESS_SHIM_HOOK:-}\" ] || \"$HARNESS_SHIM_HOOK\" \"$0\"\n")
         command.chmod(0o755)
-    hook = sandbox.root / "shim-hook"
     environment = {
-        "HOME": str(sandbox.root / "home"),
-        "CODEX_HOME": str(sandbox.root / "codex-home"),
-        "XDG_STATE_HOME": str(sandbox.root / "xdg/state"),
-        "XDG_CONFIG_HOME": str(sandbox.root / "xdg/config"),
-        "XDG_CACHE_HOME": str(sandbox.root / "xdg/cache"),
-        "XDG_DATA_HOME": str(sandbox.root / "xdg/data"),
-        "TMPDIR": str(sandbox.root / "tmp"),
-        "NPM_CONFIG_USERCONFIG": str(sandbox.root / "npm/config/npmrc"),
-        "NPM_CONFIG_CACHE": str(sandbox.root / "npm/cache"),
-        "NPM_CONFIG_PREFIX": str(sandbox.root / "npm/prefix"),
-        "PI_HOME": str(sandbox.root / "pi"),
-        "GIT_CONFIG_GLOBAL": str(sandbox.root / "git/global"),
-        "GIT_CONFIG_SYSTEM": str(sandbox.root / "git/system"),
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "PATH": str(fake_bin),
-        "PYTHONPATH": str(sandbox.project / "src"),
-        "PYTHONDONTWRITEBYTECODE": "1",
-        "PYTHONNOUSERSITE": "1",
-        "HARNESS_LOG": str(sandbox.root / "commands"),
+        "HOME": str(sandbox.root / "home"), "CODEX_HOME": str(sandbox.root / "codex-home"),
+        "XDG_STATE_HOME": str(sandbox.root / "xdg/state"), "XDG_CONFIG_HOME": str(sandbox.root / "xdg/config"),
+        "XDG_CACHE_HOME": str(sandbox.root / "xdg/cache"), "XDG_DATA_HOME": str(sandbox.root / "xdg/data"),
+        "TMPDIR": str(sandbox.root / "tmp"), "NPM_CONFIG_USERCONFIG": str(sandbox.root / "npm/config/npmrc"),
+        "NPM_CONFIG_CACHE": str(sandbox.root / "npm/cache"), "NPM_CONFIG_PREFIX": str(sandbox.root / "npm/prefix"),
+        "PI_HOME": str(sandbox.root / "pi"), "GIT_CONFIG_GLOBAL": str(sandbox.root / "git/global"),
+        "GIT_CONFIG_SYSTEM": str(sandbox.root / "git/system"), "GIT_CONFIG_NOSYSTEM": "1",
+        "PATH": str(fake_bin), "PYTHONPATH": str(sandbox.project / "src"),
+        "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1", "HARNESS_LOG": str(sandbox.root / "commands"),
     }
+    hook = sandbox.root / "shim-hook"
     if hook.exists():
         environment["HARNESS_SHIM_HOOK"] = str(hook)
+    for key, value in (environment_override or {}).items():
+        if key in _MUTATION_ENVIRONMENT_PATHS and not allow_unsafe_validation:
+            if value is None:
+                raise RuntimeError(f"mutating subprocess environment removes sandbox boundary: {key}")
+            candidate = Path(value)
+            if not candidate.is_absolute() or not candidate.resolve().is_relative_to(sandbox.root.resolve()):
+                raise RuntimeError(f"mutating subprocess environment escapes sandbox: {key}={value!r}")
+        if value is None:
+            environment.pop(key, None)
+        else:
+            environment[key] = value
+    return environment
+
+
+def invoke(sandbox: Sandbox, *arguments: str, environment_override: dict[str, str | None] | None = None) -> subprocess.CompletedProcess[str]:
+    # Mutating CLI subprocesses may only receive sandbox-contained path values.
+    environment = subprocess_environment(sandbox, environment_override)
     cwd = sandbox.project.resolve()
     if not cwd.is_relative_to(sandbox.root.resolve()) or cwd == SOURCE_ROOT.resolve():
         raise RuntimeError("CLI subprocess must run from sandbox project")
-    if environment["PYTHONPATH"] != str(sandbox.project / "src"):
-        raise RuntimeError("CLI subprocess must import from sandbox project")
+    return subprocess.run([sys.executable, "-m", "harness_kit.cli", *arguments], cwd=cwd, env=environment, text=True, capture_output=True)
+
+
+def invoke_validation(sandbox: Sandbox, environment_override: dict[str, str | None] | None = None) -> subprocess.CompletedProcess[str]:
+    """Run state-root validation only; it never invokes the mutating CLI."""
+    environment = subprocess_environment(sandbox, environment_override, allow_unsafe_validation=True)
     return subprocess.run(
-        [sys.executable, "-m", "harness_kit.cli", *arguments],
-        cwd=cwd,
+        [sys.executable, "-c", "from harness_kit.cli import state_path; print(state_path())"],
+        cwd=sandbox.project,
         env=environment,
         text=True,
         capture_output=True,
@@ -144,6 +160,106 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn(str(self.project), result.stdout)
         self.assertFalse((self.path / "commands").exists())
         self.assertFalse((self.path / "home").exists())
+
+    def test_invalid_state_roots_fail_in_non_mutating_validation_subprocess(self) -> None:
+        invalid_roots = ("", "relative/state", "/")
+        for root in invalid_roots:
+            with self.subTest(root=repr(root)), temporary_sandbox() as sandbox:
+                result = invoke_validation(sandbox, {"XDG_STATE_HOME": root})
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertIn("XDG_STATE_HOME", result.stderr)
+                self.assertFalse((sandbox.root / "commands").exists())
+
+        with temporary_sandbox() as sandbox:
+            result = invoke_validation(sandbox, {"XDG_STATE_HOME": None, "HOME": "/"})
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertIn("HOME", result.stderr)
+            self.assertFalse((sandbox.root / "commands").exists())
+
+    def test_mutating_subprocess_rejects_unsafe_path_overrides(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "escapes sandbox"):
+            invoke(self.sandbox, "install", environment_override={"XDG_STATE_HOME": "/"})
+        with self.assertRaisesRegex(RuntimeError, "removes sandbox boundary"):
+            invoke(self.sandbox, "install", environment_override={"PATH": None})
+
+    def test_state_ancestors_and_state_file_fail_closed_before_external_commands(self) -> None:
+        cases = ("root-link", "root-file", "kit-link", "kit-file", "state-link", "state-file")
+        for case in cases:
+            with self.subTest(case=case), temporary_sandbox() as sandbox:
+                root = sandbox.root / "xdg/state"
+                state_directory = root / "harness-kit"
+                outside = sandbox.root / "outside"
+                outside.mkdir()
+                if case == "root-link":
+                    root.parent.mkdir(parents=True)
+                    root.symlink_to(outside, target_is_directory=True)
+                elif case == "root-file":
+                    root.parent.mkdir(parents=True)
+                    root.write_text("not a directory\n")
+                elif case == "kit-link":
+                    root.mkdir(parents=True)
+                    state_directory.symlink_to(outside, target_is_directory=True)
+                elif case == "kit-file":
+                    root.mkdir(parents=True)
+                    state_directory.write_text("not a directory\n")
+                else:
+                    state_directory.mkdir(parents=True)
+                    state = state_directory / "state.json"
+                    if case == "state-link":
+                        state.symlink_to(outside / "state.json")
+                    else:
+                        state.mkdir()
+                result = invoke(sandbox, "install")
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("state", result.stderr)
+                self.assertFalse((sandbox.root / "commands").exists())
+
+    def test_state_write_does_not_follow_predictable_temporary_link(self) -> None:
+        state_directory = self.path / "xdg/state/harness-kit"
+        state_directory.mkdir(parents=True)
+        canary = self.path / "canary"
+        canary.write_text("protected\n")
+        (state_directory / "state.tmp").symlink_to(canary)
+
+        result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "instructions")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(canary.read_text(), "protected\n")
+        self.assertTrue((state_directory / "state.tmp").is_symlink())
+        self.assertTrue((state_directory / "state.json").is_file())
+
+    def test_state_write_refuses_substituted_temporary_and_preserves_it(self) -> None:
+        state_directory = self.path / "xdg/state/harness-kit"
+        state_directory.mkdir(parents=True)
+        canary = self.path / "canary"
+        canary.write_text("protected\n")
+        # sitecustomize is copied-test subprocess instrumentation, not a CLI hook.
+        (self.project / "src/sitecustomize.py").write_text(
+            "import os\n"
+            "original_open = os.open\n"
+            "def substituted_open(path, flags, mode=0o777, *, dir_fd=None):\n"
+            "    descriptor = original_open(path, flags, mode, dir_fd=dir_fd)\n"
+            "    if isinstance(path, str) and path.startswith('.state-') and flags & os.O_CREAT:\n"
+            "        os.unlink(path, dir_fd=dir_fd)\n"
+            "        os.symlink(os.environ['STATE_TEMP_CANARY'], path, dir_fd=dir_fd)\n"
+            "    return descriptor\n"
+            "os.open = substituted_open\n"
+        )
+
+        result = invoke(
+            self.sandbox,
+            "install", "--harness", "claude", "--component", "instructions",
+            environment_override={"STATE_TEMP_CANARY": str(canary)},
+        )
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("temporary was substituted", result.stderr)
+        self.assertEqual(canary.read_text(), "protected\n")
+        leftovers = list(state_directory.glob(".state-*.tmp"))
+        self.assertEqual(len(leftovers), 1)
+        self.assertTrue(leftovers[0].is_symlink())
+        self.assertEqual(leftovers[0].resolve(), canary)
+        self.assertFalse((state_directory / "state.json").exists())
 
     def test_install_is_idempotent_and_owns_links(self) -> None:
         first = invoke(self.sandbox, "install")

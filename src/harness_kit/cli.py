@@ -5,11 +5,14 @@ import argparse
 import json
 import os
 import re
+import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import tomllib
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -88,8 +91,134 @@ def legacy_pi_package() -> Path:
 
 
 def state_path() -> Path:
-    root = Path(os.environ.get("XDG_STATE_HOME", home() / ".local/state"))
+    value = os.environ.get("XDG_STATE_HOME")
+    if value is None:
+        root = home() / ".local/state"
+    else:
+        if not value:
+            raise KitError("XDG_STATE_HOME must be nonempty")
+        root = Path(value)
+    if not root.is_absolute():
+        raise KitError(f"XDG_STATE_HOME must be absolute: {root}")
+    if len(root.parts) < 3:
+        raise KitError(f"XDG_STATE_HOME is suspiciously shallow: {root}")
     return root / "harness-kit/state.json"
+
+
+def _state_directory_error(path: Path, parent_descriptor: int, name: str, error: OSError) -> KitError:
+    try:
+        info = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return KitError(f"cannot inspect state directory {path}: {error}")
+    if stat.S_ISLNK(info.st_mode):
+        return KitError(f"refusing state path with symlinked ancestor: {path}")
+    if not stat.S_ISDIR(info.st_mode):
+        return KitError(f"refusing state path with non-directory ancestor: {path}")
+    return KitError(f"cannot inspect state directory {path}: {error}")
+
+
+@contextmanager
+def state_directory(create_directories: bool = False):
+    """Pin the state directory while traversing each component without links."""
+    path = state_path()
+    parts = path.parent.parts
+    descriptor = os.open(parts[0], os.O_RDONLY | os.O_DIRECTORY)
+    current = Path(parts[0])
+    try:
+        for name in parts[1:]:
+            current /= name
+            try:
+                child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            except FileNotFoundError:
+                if not create_directories:
+                    yield None
+                    return
+                try:
+                    os.mkdir(name, dir_fd=descriptor)
+                    child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+                except OSError as error:
+                    raise _state_directory_error(current, descriptor, name, error) from error
+            except OSError as error:
+                raise _state_directory_error(current, descriptor, name, error) from error
+            os.close(descriptor)
+            descriptor = child
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+def validate_pinned_state_directory(descriptor: int, path: Path) -> None:
+    try:
+        info = os.fstat(descriptor)
+    except OSError as error:
+        raise KitError(f"cannot inspect state directory {path.parent}: {error}") from error
+    if not stat.S_ISDIR(info.st_mode):
+        raise KitError(f"refusing state path with non-directory ancestor: {path.parent}")
+
+
+def validate_state_entry(descriptor: int, path: Path) -> bool:
+    try:
+        info = os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise KitError(f"cannot inspect ownership state {path}: {error}") from error
+    if stat.S_ISLNK(info.st_mode):
+        raise KitError(f"refusing ownership state symlink: {path}")
+    if not stat.S_ISREG(info.st_mode):
+        raise KitError(f"refusing ownership state non-regular file: {path}")
+    return True
+
+
+def temporary_matches(descriptor: int, name: str, identity: os.stat_result) -> bool:
+    try:
+        current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino)
+
+
+def write_state(links: dict[str, str]) -> None:
+    path = state_path()
+    name: str | None = None
+    identity: os.stat_result | None = None
+    with state_directory(create_directories=True) as descriptor:
+        assert descriptor is not None
+        validate_state_entry(descriptor, path)
+        try:
+            for _ in range(100):
+                candidate = f".state-{secrets.token_hex(16)}.tmp"
+                try:
+                    file_descriptor = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=descriptor)
+                    name = candidate
+                    break
+                except FileExistsError:
+                    continue
+            else:
+                raise KitError(f"cannot create ownership state temporary in {path.parent}")
+            identity = os.fstat(file_descriptor)
+            with os.fdopen(file_descriptor, "w") as file:
+                file.write(json.dumps({"links": links}, indent=2, sort_keys=True) + "\n")
+                file.flush()
+                os.fsync(file.fileno())
+            if not temporary_matches(descriptor, name, identity):
+                raise KitError(f"ownership state temporary was substituted: {path.parent / name}")
+            # Recheck the pinned directory and final entry immediately before replacement.
+            validate_pinned_state_directory(descriptor, path)
+            validate_state_entry(descriptor, path)
+            os.replace(name, path.name, src_dir_fd=descriptor, dst_dir_fd=descriptor)
+            name = None
+            os.fsync(descriptor)
+        except OSError as error:
+            raise KitError(f"cannot write ownership state {path}: {error}") from error
+        finally:
+            if name is not None and identity is not None and temporary_matches(descriptor, name, identity):
+                try:
+                    os.unlink(name, dir_fd=descriptor)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
 
 
 def load_toml(path: Path) -> dict[str, Any]:
@@ -256,18 +385,24 @@ def is_managed_destination(value: str) -> bool:
 
 def load_state() -> dict[str, str]:
     path = state_path()
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text())
-        links = data.get("links", {})
-        if not isinstance(links, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in links.items()):
-            raise ValueError("links must be a string map")
-        if not all(is_managed_destination(destination) for destination in links):
-            raise ValueError("links contain an unmanaged or malformed destination")
-        return links
-    except (OSError, ValueError, json.JSONDecodeError) as error:
-        raise KitError(f"invalid ownership state {path}: {error}") from error
+    with state_directory() as descriptor:
+        if descriptor is None or not validate_state_entry(descriptor, path):
+            return {}
+        try:
+            file_descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=descriptor)
+            with os.fdopen(file_descriptor) as file:
+                info = os.fstat(file.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError("state.json is not a regular file")
+                data = json.load(file)
+            links = data.get("links", {})
+            if not isinstance(links, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in links.items()):
+                raise ValueError("links must be a string map")
+            if not all(is_managed_destination(destination) for destination in links):
+                raise ValueError("links contain an unmanaged or malformed destination")
+            return links
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise KitError(f"invalid ownership state {path}: {error}") from error
 
 
 def desired_links(harness: str, agents: list[Agent], components: frozenset[str]) -> list[Link]:
@@ -501,11 +636,7 @@ def install(harness: str, components: frozenset[str], dry_run: bool, adopt_legac
             if path.is_symlink() or path.exists():
                 path.unlink()
             path.symlink_to(operation.link.target)
-    state = state_path()
-    state.parent.mkdir(parents=True, exist_ok=True)
-    temporary = state.with_suffix(".tmp")
-    temporary.write_text(json.dumps({"links": next_state}, indent=2, sort_keys=True) + "\n")
-    temporary.replace(state)
+    write_state(next_state)
     return 0
 
 
