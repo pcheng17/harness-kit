@@ -86,10 +86,6 @@ def legacy_pi_instructions() -> Path:
     return home() / "dev/pi-kit/config/pi/AGENTS.md"
 
 
-def legacy_pi_package() -> Path:
-    return home() / "dev/pi-kit"
-
-
 def state_path() -> Path:
     value = os.environ.get("XDG_STATE_HOME")
     if value is None:
@@ -547,20 +543,14 @@ def preview(
     return operations, next_state
 
 
-def agent_execution_plan(harness: str, components: frozenset[str], adopt_legacy: bool = False) -> list[Operation]:
+def agent_execution_plan(harness: str, components: frozenset[str]) -> list[Operation]:
     if harness not in ("all", "pi") or "agents" not in components:
         return []
-    operations = [
+    return [
         Operation("render", Link(GENERATED / "pi/agents", ROOT / "content/agents", "generated-agents"), "render Pi agents"),
         Operation("npm ci", Link(ROOT / "node_modules", ROOT / "package-lock.json", "npm-dependencies"), "install npm dependencies"),
+        Operation("pi install", Link(home() / ".pi/agent/settings.json", ROOT, "pi-package"), "register Pi package"),
     ]
-    if legacy_pi_package_registered():
-        if adopt_legacy:
-            operations.append(Operation("pi remove", Link(home() / ".pi/agent/settings.json", legacy_pi_package(), "legacy-pi-package"), "remove legacy Pi package"))
-        else:
-            operations.append(Operation("conflict", Link(home() / ".pi/agent/settings.json", legacy_pi_package(), "legacy-pi-package"), "legacy pi-kit package is registered; rerun with --adopt-legacy"))
-    operations.append(Operation("pi install", Link(home() / ".pi/agent/settings.json", ROOT, "pi-package"), "register Pi package"))
-    return operations
 
 
 def print_plan(operations: list[Operation]) -> None:
@@ -583,19 +573,6 @@ def verify_generated(files: dict[Path, str], harness: str) -> bool:
     return True
 
 
-def legacy_pi_package_registered() -> bool:
-    settings = home() / ".pi/agent/settings.json"
-    try:
-        packages = json.loads(settings.read_text()).get("packages", [])
-    except (OSError, ValueError, json.JSONDecodeError):
-        return False
-    for entry in packages:
-        source = entry if isinstance(entry, str) else entry.get("source") if isinstance(entry, dict) else None
-        if isinstance(source, str) and (settings.parent / source).resolve() == legacy_pi_package().resolve():
-            return True
-    return False
-
-
 def run(command: list[str]) -> None:
     try:
         subprocess.run(command, cwd=ROOT, check=True)
@@ -609,21 +586,17 @@ def install(harness: str, components: frozenset[str], dry_run: bool, adopt_legac
     policy, agents = load_catalog(harness, components)
     files = render(policy, agents, harness) if agents else {}
     operations, next_state = preview(harness, agents, components, adopt_legacy, skip)
-    operations.extend(agent_execution_plan(harness, components, adopt_legacy))
+    operations.extend(agent_execution_plan(harness, components))
     print_plan(operations)
     conflicts = [operation for operation in operations if operation.action == "conflict"]
     if conflicts:
         raise KitError("refusing to overwrite unmanaged destinations")
     if dry_run:
         return 0
-    if harness in ("all", "pi") and "agents" in components and legacy_pi_package_registered() and not adopt_legacy:
-        raise KitError("legacy pi-kit package is registered; rerun with --adopt-legacy to replace it")
     if "agents" in components:
         materialize(files, harness)
     if harness in ("all", "pi") and "agents" in components:
         run(["npm", "ci"])
-        if legacy_pi_package_registered():
-            run(["pi", "remove", str(legacy_pi_package())])
         run(["pi", "install", str(ROOT)])
     for operation in operations:
         path = operation.link.destination
@@ -651,7 +624,7 @@ def check(harness: str, components: frozenset[str]) -> int:
             installed = str(ROOT) in json.loads(settings.read_text()).get("packages", [])
         except (OSError, ValueError, json.JSONDecodeError):
             installed = False
-        drift = drift or not installed or legacy_pi_package_registered()
+        drift = drift or not installed
     if drift:
         print("harness-kit is valid but not converged; run: uv run harness-kit install")
         print_plan(operations)

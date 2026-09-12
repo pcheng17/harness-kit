@@ -671,20 +671,39 @@ class HarnessKitTests(unittest.TestCase):
         self.assertFalse(stale.exists())
         self.assertFalse(legacy.exists())
 
-    def test_pi_agents_plan_reports_legacy_package_migration(self) -> None:
+    def test_pi_agents_preview_ignores_string_form_old_package(self) -> None:
         home = self.path / "home"
         settings = home / ".pi/agent/settings.json"
         settings.parent.mkdir(parents=True)
         settings.write_text(json.dumps({"packages": [str(home / "dev/pi-kit")]}) + "\n")
-        blocked = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
-        self.assertEqual(blocked.returncode, 2)
-        self.assertIn("[CONFLICT]", blocked.stdout)
-        self.assertIn("legacy pi-kit package is registered", blocked.stdout)
-        adopted = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents", "--dry-run", "--adopt-legacy")
-        self.assertEqual(adopted.returncode, 0, adopted.stderr)
-        self.assertIn("[PI REMOVE]", adopted.stdout)
-        self.assertIn(str(home / "dev/pi-kit"), adopted.stdout)
-        self.assertFalse((self.path / "commands").exists())
+        result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("[CONFLICT]", result.stdout)
+        self.assertNotIn("[PI REMOVE]", result.stdout)
+
+        installed = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        commands = (self.path / "commands").read_text()
+        self.assertIn("npm ci", commands)
+        self.assertIn("pi install", commands)
+        self.assertNotIn("pi remove", commands)
+
+    def test_pi_agents_preview_ignores_object_form_old_package(self) -> None:
+        home = self.path / "home"
+        settings = home / ".pi/agent/settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({"packages": [{"source": str(home / "dev/pi-kit")}]}) + "\n")
+        result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("[CONFLICT]", result.stdout)
+        self.assertNotIn("[PI REMOVE]", result.stdout)
+
+        installed = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        commands = (self.path / "commands").read_text()
+        self.assertIn("npm ci", commands)
+        self.assertIn("pi install", commands)
+        self.assertNotIn("pi remove", commands)
 
 
 if __name__ == "__main__":
