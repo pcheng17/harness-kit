@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -219,6 +220,39 @@ def materialize(files: dict[Path, str], harness: str) -> None:
             shutil.rmtree(require_relative_to(temporary_root, ROOT), ignore_errors=True)
 
 
+_MANAGED_BASENAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+
+
+def managed_destination_kind(value: str) -> str | None:
+    """Classify an exact, normalized ownership-state destination key."""
+    if not value or "\0" in value:
+        return None
+    path = Path(value)
+    # Keep this lexical: state paths must be normalized, and symlinked
+    # ancestors are intentionally outside this PR's scope.
+    if not path.is_absolute() or str(path) != value:
+        return None
+    user_home = home()
+    fixed = {
+        user_home / ".claude/CLAUDE.md": "claude-instructions",
+        user_home / ".agents/AGENTS.md": "shared-instructions",
+        user_home / ".pi/agent/AGENTS.md": "pi-instructions",
+    }
+    if path in fixed:
+        return fixed[path]
+    if path.parent == user_home / ".claude/agents":
+        return "claude-agent" if path.suffix == ".md" and _MANAGED_BASENAME.fullmatch(path.stem) else None
+    if path.parent == user_home / ".claude/skills":
+        return "claude-skill" if _MANAGED_BASENAME.fullmatch(path.name) else None
+    if path.parent == user_home / ".agents/skills":
+        return "shared-skill" if _MANAGED_BASENAME.fullmatch(path.name) else None
+    return None
+
+
+def is_managed_destination(value: str) -> bool:
+    return managed_destination_kind(value) is not None
+
+
 def load_state() -> dict[str, str]:
     path = state_path()
     if not path.exists():
@@ -228,6 +262,8 @@ def load_state() -> dict[str, str]:
         links = data.get("links", {})
         if not isinstance(links, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in links.items()):
             raise ValueError("links must be a string map")
+        if not all(is_managed_destination(destination) for destination in links):
+            raise ValueError("links contain an unmanaged or malformed destination")
         return links
     except (OSError, ValueError, json.JSONDecodeError) as error:
         raise KitError(f"invalid ownership state {path}: {error}") from error
@@ -277,30 +313,20 @@ def is_legacy_target(link: Link, current: Path | None) -> bool:
 
 
 def selected_destination(path: Path, harness: str, components: frozenset[str]) -> bool:
-    # Do not resolve this path: a deployed symlink resolves outside its harness root.
-    path = path.absolute()
-    if components == COMPONENTS:
-        roots: list[Path] = []
-        if harness in ("all", "claude"):
-            roots.append((home() / ".claude").absolute())
-        if harness in ("all", "pi"):
-            roots.extend(((home() / ".pi").absolute(), (home() / ".agents").absolute()))
-        return any(path.is_relative_to(root) for root in roots)
-    user_home = home()
-    selected: list[Path] = []
-    if "skills" in components:
-        if harness in ("all", "claude"):
-            selected.append(user_home / ".claude/skills")
-        if harness in ("all", "pi"):
-            selected.append(user_home / ".agents/skills")
-    if "agents" in components and harness in ("all", "claude"):
-        selected.append(user_home / ".claude/agents")
-    if "instructions" in components:
-        if harness in ("all", "claude"):
-            selected.append(user_home / ".claude/CLAUDE.md")
-        if harness in ("all", "pi"):
-            selected.extend((user_home / ".agents/AGENTS.md", user_home / ".pi/agent/AGENTS.md"))
-    return any(path == destination.absolute() or path.is_relative_to(destination.absolute()) for destination in selected)
+    # State is validated before this is called; classify it again rather than
+    # treating an entire harness directory as owned.
+    kind = managed_destination_kind(str(path))
+    if kind is None:
+        return False
+    if kind == "claude-instructions":
+        return harness in ("all", "claude") and "instructions" in components
+    if kind in {"shared-instructions", "pi-instructions"}:
+        return harness in ("all", "pi") and "instructions" in components
+    if kind == "claude-agent":
+        return harness in ("all", "claude") and "agents" in components
+    if kind == "claude-skill":
+        return harness in ("all", "claude") and "skills" in components
+    return harness in ("all", "pi") and "skills" in components
 
 
 def preview(
