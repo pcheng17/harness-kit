@@ -38,14 +38,13 @@ class Agent:
 class Link:
     destination: Path
     target: Path
-    kind: str
 
 
 @dataclass(frozen=True)
 class Operation:
     action: str
-    link: Link
     detail: str = ""
+    link: Link | None = None
 
 
 def home() -> Path:
@@ -199,25 +198,25 @@ def desired_links(harness: str, agents: list[Agent], components: frozenset[str])
     links: list[Link] = []
     if harness in ("all", "claude"):
         if "instructions" in components:
-            links.append(Link(user_home / ".claude/CLAUDE.md", COMMON_INSTRUCTIONS, "common-instructions"))
+            links.append(Link(user_home / ".claude/CLAUDE.md", COMMON_INSTRUCTIONS))
         if "agents" in components:
             for agent in agents:
                 agent_file = GENERATED / "claude/agents" / f"{agent.name}.md"
-                links.append(Link(user_home / ".claude/agents" / agent_file.name, agent_file, "claude-agent"))
+                links.append(Link(user_home / ".claude/agents" / agent_file.name, agent_file))
         if "skills" in components:
             for skill in sorted((ROOT / "content/skills").iterdir()):
                 if skill.is_dir() and (skill / "SKILL.md").is_file():
-                    links.append(Link(user_home / ".claude/skills" / skill.name, skill, "claude-skill"))
+                    links.append(Link(user_home / ".claude/skills" / skill.name, skill))
     if harness in ("all", "pi"):
         if "instructions" in components:
             links.extend((
-                Link(user_home / ".agents/AGENTS.md", COMMON_INSTRUCTIONS, "common-instructions"),
-                Link(user_home / ".pi/agent/AGENTS.md", COMMON_INSTRUCTIONS, "common-instructions"),
+                Link(user_home / ".agents/AGENTS.md", COMMON_INSTRUCTIONS),
+                Link(user_home / ".pi/agent/AGENTS.md", COMMON_INSTRUCTIONS),
             ))
         if "skills" in components:
             for skill in sorted((ROOT / "content/skills").iterdir()):
                 if skill.is_dir() and (skill / "SKILL.md").is_file():
-                    links.append(Link(user_home / ".agents/skills" / skill.name, skill, "shared-skill"))
+                    links.append(Link(user_home / ".agents/skills" / skill.name, skill))
     return links
 
 
@@ -247,6 +246,8 @@ def link_target(path: Path) -> Path | None:
 
 def validate_operation_preconditions(operation: Operation) -> None:
     """Recheck the plan's filesystem observations immediately before mutation."""
+    if operation.link is None:
+        return
     path = operation.link.destination
     validate_managed_ancestors(path)
     exists = path.exists() or path.is_symlink()
@@ -255,40 +256,32 @@ def validate_operation_preconditions(operation: Operation) -> None:
             raise KitError(f"refusing to create substituted destination: {path}")
 
 
-def preview(
-    harness: str,
-    agents: list[Agent],
-    components: frozenset[str] = COMPONENTS,
-) -> list[Operation]:
-    desired = desired_links(harness, agents, components)
+def link_operations(harness: str, agents: list[Agent], components: frozenset[str]) -> list[Operation]:
     operations: list[Operation] = []
-    for link in desired:
+    for link in desired_links(harness, agents, components):
         validate_managed_ancestors(link.destination)
         current = link_target(link.destination)
         if not link.destination.exists() and not link.destination.is_symlink():
-            operations.append(Operation("create", link))
+            operations.append(Operation("create", link=link))
         elif current == link.target.resolve():
-            operations.append(Operation("noop", link))
+            operations.append(Operation("noop", link=link))
         else:
-            operations.append(Operation("conflict", link, "destination target differs"))
+            operations.append(Operation("conflict", "destination target differs", link))
     return operations
 
 
-def agent_execution_plan(harness: str, components: frozenset[str]) -> list[Operation]:
-    if "agents" not in components:
-        return []
-
+def install_plan(harness: str, agents: list[Agent], components: frozenset[str]) -> list[Operation]:
+    """The ordered Install plan: generation, Pi bootstrap, then desired links."""
     operations: list[Operation] = []
-    if harness in ("all", "claude"):
-        operations.append(
-            Operation("render", Link(GENERATED / "claude/agents", ROOT / "content/agents", "generated-agents"), "render Claude agents")
-        )
-    if harness in ("all", "pi"):
-        operations.extend((
-            Operation("render", Link(GENERATED / "pi/agents", ROOT / "content/agents", "generated-agents"), "render Pi agents"),
-            Operation("npm ci", Link(ROOT / "node_modules", ROOT / "package-lock.json", "npm-dependencies"), "install npm dependencies"),
-            Operation("pi install", Link(home() / ".pi/agent/settings.json", ROOT, "pi-package"), "register Pi package"),
-        ))
+    if "agents" in components:
+        generated_paths = [GENERATED / selected / "agents" for selected in ("claude", "pi") if harness in ("all", selected)]
+        operations.append(Operation("render", f"generate selected agent trees at {', '.join(map(str, generated_paths))}"))
+        if harness in ("all", "pi"):
+            operations.extend((
+                Operation("npm ci", "install npm dependencies"),
+                Operation("pi install", "register Pi package"),
+            ))
+    operations.extend(link_operations(harness, agents, components))
     return operations
 
 
@@ -296,7 +289,10 @@ def print_plan(operations: list[Operation]) -> None:
     for operation in operations:
         suffix = f" ({operation.detail})" if operation.detail else ""
         action = f"[{operation.action.upper()}]"
-        print(f"{action:12} {operation.link.destination} -> {operation.link.target}{suffix}")
+        if operation.link is None:
+            print(f"{action:12} {operation.detail}")
+        else:
+            print(f"{action:12} {operation.link.destination} -> {operation.link.target}{suffix}")
 
 
 def verify_generated(files: dict[Path, str], harness: str) -> bool:
@@ -324,21 +320,21 @@ def run(command: list[str]) -> None:
 def install(harness: str, components: frozenset[str]) -> int:
     policy, agents = load_catalog(harness, components)
     files = render(policy, agents, harness) if agents else {}
-    operations = preview(harness, agents, components)
-    operations.extend(agent_execution_plan(harness, components))
+    operations = install_plan(harness, agents, components)
     print_plan(operations)
-    conflicts = [operation for operation in operations if operation.action == "conflict"]
-    if conflicts:
+    if any(operation.action == "conflict" for operation in operations):
         raise KitError("refusing to overwrite unmanaged destinations")
-    if "agents" in components:
-        materialize(files, harness)
-    if harness in ("all", "pi") and "agents" in components:
-        run(["npm", "ci"])
-        run(["pi", "install", str(ROOT)])
     for operation in operations:
-        path = operation.link.destination
-        if operation.action == "create":
+        if operation.action == "render":
+            materialize(files, harness)
+        elif operation.action == "npm ci":
+            run(["npm", "ci"])
+        elif operation.action == "pi install":
+            run(["pi", "install", str(ROOT)])
+        elif operation.action == "create":
             validate_operation_preconditions(operation)
+            assert operation.link is not None
+            path = operation.link.destination
             path.parent.mkdir(parents=True, exist_ok=True)
             try:
                 path.symlink_to(operation.link.target)
@@ -350,7 +346,7 @@ def install(harness: str, components: frozenset[str]) -> int:
 def check(harness: str, components: frozenset[str]) -> int:
     policy, agents = load_catalog(harness, components)
     files = render(policy, agents, harness) if agents else {}
-    operations = preview(harness, agents, components)
+    operations = link_operations(harness, agents, components)
     drift = ("agents" in components and not verify_generated(files, harness)) or any(operation.action != "noop" for operation in operations)
     if harness in ("all", "pi") and "agents" in components:
         settings = home() / ".pi/agent/settings.json"
@@ -392,8 +388,7 @@ def main(argv: list[str] | None = None) -> int:
             # Render validation is intentionally performed without writing output.
             if agents:
                 render(policy, agents, args.harness)
-            operations = preview(args.harness, agents, components)
-            operations.extend(agent_execution_plan(args.harness, components))
+            operations = install_plan(args.harness, agents, components)
             print_plan(operations)
             return 2 if any(operation.action == "conflict" for operation in operations) else 0
         if args.command == "install":

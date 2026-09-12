@@ -572,7 +572,7 @@ class HarnessKitTests(unittest.TestCase):
             with self.subTest(harness=harness):
                 result = invoke(self.sandbox, "preview", "--harness", harness, "--component", "agents")
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.count("[RENDER]"), len(rendered))
+                self.assertEqual(result.stdout.count("[RENDER]"), 1)
                 for selected in rendered:
                     self.assertIn(str(self.project / f".generated/{selected}/agents"), result.stdout)
                 for unselected in {"claude", "pi"} - set(rendered):
@@ -582,6 +582,33 @@ class HarnessKitTests(unittest.TestCase):
                 self.assertIn(str(self.project), result.stdout)
                 self.assertNotIn(str(SOURCE_ROOT), result.stdout)
                 self.assertFalse((self.path / "commands").exists())
+
+    def test_install_plan_drives_preview_and_execution_in_order(self) -> None:
+        generated = self.project / ".generated/pi/agents/scout.md"
+        destination = self.path / "home/.claude/agents/scout.md"
+        hook = self.path / "shim-hook"
+        hook.write_text(
+            "#!/bin/sh\n"
+            f'test -f "{generated}" || exit 20\n'
+            f'test ! -e "{destination}" || exit 21\n'
+        )
+        hook.chmod(0o755)
+
+        preview = invoke(self.sandbox, "preview", "--component", "agents")
+        self.assertEqual(preview.returncode, 0, preview.stderr)
+        markers = ("[RENDER]", "[NPM CI]", "[PI INSTALL]", "[CREATE]")
+        positions = [preview.stdout.index(marker) for marker in markers]
+        self.assertEqual(positions, sorted(positions))
+
+        installed = invoke(self.sandbox, "install", "--component", "agents")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        self.assertEqual(installed.stdout, preview.stdout)
+        self.assertTrue(generated.is_file())
+        self.assertTrue(destination.is_symlink())
+        commands = (self.path / "commands").read_text().splitlines()
+        self.assertEqual(len(commands), 2)
+        self.assertIn("npm ci", commands[0])
+        self.assertIn("pi install", commands[1])
 
     def test_agent_install_creates_missing_generated_parent(self) -> None:
         generated = self.project / ".generated"
