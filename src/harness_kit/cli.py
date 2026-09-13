@@ -289,11 +289,15 @@ def shared_skill_links(user_home: Path) -> list[Link]:
 def desired_links(harness: str, agents: list[Agent], components: frozenset[str]) -> list[Link]:
     user_home = home()
     links: list[Link] = []
-    if harness in ("all", "codex") and "agents" in components:
-        destination_root = codex_home() / "agents"
-        for agent in agents:
-            agent_file = GENERATED / "codex/agents" / f"{agent.name}.toml"
-            links.append(Link(destination_root / agent_file.name, agent_file))
+    if harness in ("all", "codex"):
+        if "instructions" in components:
+            destination_root = codex_home()
+            links.append(Link(destination_root / "AGENTS.md", COMMON_INSTRUCTIONS))
+        if "agents" in components:
+            destination_root = codex_home() / "agents"
+            for agent in agents:
+                agent_file = GENERATED / "codex/agents" / f"{agent.name}.toml"
+                links.append(Link(destination_root / agent_file.name, agent_file))
     if harness in ("all", "claude"):
         if "instructions" in components:
             links.append(Link(user_home / ".claude/CLAUDE.md", COMMON_INSTRUCTIONS))
@@ -350,8 +354,7 @@ def validate_operation_preconditions(operation: Operation) -> None:
     if operation.link is None:
         return
     path = operation.link.destination
-    managed_root = codex_home() if operation.link.target.is_relative_to(GENERATED / "codex") else None
-    validate_managed_ancestors(path, managed_root)
+    validate_managed_ancestors(path)
     exists = path.exists() or path.is_symlink()
     if operation.action == "create":
         if exists:
@@ -361,8 +364,7 @@ def validate_operation_preconditions(operation: Operation) -> None:
 def link_operations(harness: str, agents: list[Agent], components: frozenset[str]) -> list[Operation]:
     operations: list[Operation] = []
     for link in desired_links(harness, agents, components):
-        managed_root = codex_home() if link.target.is_relative_to(GENERATED / "codex") else None
-        validate_managed_ancestors(link.destination, managed_root)
+        validate_managed_ancestors(link.destination)
         current = link_target(link.destination)
         if not link.destination.exists() and not link.destination.is_symlink():
             operations.append(Operation("create", link=link))
@@ -448,7 +450,7 @@ def install(harness: str, components: frozenset[str]) -> int:
             assert operation.link is not None
             path = operation.link.destination
             # Revalidate after any preceding operation and immediately before
-            # mkdir/symlink, including Codex's separate managed root.
+            # mkdir/symlink, including the entire HOME-to-destination chain.
             validate_operation_preconditions(operation)
             path.parent.mkdir(parents=True, exist_ok=True)
             try:
