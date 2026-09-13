@@ -532,8 +532,10 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         generated = self.project / ".generated/codex/agents/scout.toml"
         data = tomllib.loads(generated.read_text())
-        self.assertEqual(set(data), {"name", "description", "developer_instructions"})
+        self.assertEqual(set(data), {"name", "description", "model", "model_reasoning_effort", "developer_instructions"})
         self.assertEqual(data["name"], "scout")
+        self.assertEqual(data["model"], "gpt-5.6-terra")
+        self.assertEqual(data["model_reasoning_effort"], "medium")
         self.assertEqual(data["developer_instructions"], (self.project / "content/agents/scout/prompt.md").read_text())
         self.assertTrue((self.path / "home/codex-home/agents/scout.toml").is_symlink())
         self.assertFalse((self.path / "commands").exists())
@@ -745,13 +747,59 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(canary.read_text(), "protected\\n")
         self.assertFalse((self.project / ".generated").exists())
 
-    def test_pi_agents_default_to_medium_thinking(self) -> None:
-        result = invoke(self.sandbox, "install", "--harness", "pi")
+    def test_shared_reasoning_effort_renders_for_all_harnesses(self) -> None:
+        result = invoke(self.sandbox, "install", "--harness", "all", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)
-        generated_agents = sorted((self.project / ".generated/pi/agents").glob("*.md"))
-        self.assertEqual(len(generated_agents), 5)
-        for agent in generated_agents:
-            self.assertIn("thinking: medium\n", agent.read_text(), agent)
+        expected_models = {"builder": "gpt-5.6-terra", "debugger": "gpt-5.6-sol", "refuter": "gpt-5.6-sol", "researcher": "gpt-5.6-terra", "scout": "gpt-5.6-terra"}
+        for name, model in expected_models.items():
+            metadata = tomllib.loads((self.project / f"content/agents/{name}/agent.toml").read_text())
+            self.assertEqual(metadata["reasoning_effort"], "medium")
+            self.assertIn("effort: medium\n", (self.project / f".generated/claude/agents/{name}.md").read_text())
+            self.assertIn("thinking: medium\n", (self.project / f".generated/pi/agents/{name}.md").read_text())
+            codex = tomllib.loads((self.project / f".generated/codex/agents/{name}.toml").read_text())
+            self.assertEqual(codex["model"], model)
+            self.assertEqual(codex["model_reasoning_effort"], "medium")
+
+    def test_harness_overrides_take_precedence(self) -> None:
+        metadata = self.project / "content/agents/scout/agent.toml"
+        metadata.write_text(
+            metadata.read_text()
+            .replace('[claude]\ncolor = "cyan"', '[claude]\ncolor = "cyan"\neffort = "low"')
+            .replace('provider = "codex"', 'provider = "codex"\nthinking = "high"')
+            + '\n[codex]\nmodel = "gpt-5.6-custom"\nmodel_reasoning_effort = "minimal"\n'
+        )
+        result = invoke(self.sandbox, "install", "--harness", "all", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("effort: low\n", (self.project / ".generated/claude/agents/scout.md").read_text())
+        self.assertIn("thinking: high\n", (self.project / ".generated/pi/agents/scout.md").read_text())
+        codex = tomllib.loads((self.project / ".generated/codex/agents/scout.toml").read_text())
+        self.assertEqual(codex["model"], "gpt-5.6-custom")
+        self.assertEqual(codex["model_reasoning_effort"], "minimal")
+
+    def test_codex_policy_and_metadata_validation(self) -> None:
+        policy = self.project / "policy.toml"
+        original_policy = policy.read_text()
+        policy.write_text(original_policy.replace('standard = "gpt-5.6-terra"', 'standard = 42', 1))
+        result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("invalid Codex model", result.stderr)
+        policy.write_text(original_policy)
+
+        metadata = self.project / "content/agents/scout/agent.toml"
+        metadata.write_text(metadata.read_text() + "\n[codex]\nmodel_reasoning_effort = 1\n")
+        result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("model_reasoning_effort must be a non-empty string", result.stderr)
+
+    def test_codex_model_override_must_be_a_non_empty_string(self) -> None:
+        metadata = self.project / "content/agents/scout/agent.toml"
+        original = metadata.read_text()
+        for value in ("42", '\"\"'):
+            with self.subTest(value=value):
+                metadata.write_text(original + f"\n[codex]\nmodel = {value}\n")
+                result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents")
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("Codex model must be a non-empty string", result.stderr)
 
     def test_scoped_install_preserves_other_harness_links(self) -> None:
         self.assertEqual(invoke(self.sandbox, "install").returncode, 0)
