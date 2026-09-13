@@ -93,6 +93,10 @@ def load_catalog(harness: str, components: frozenset[str]) -> tuple[dict[str, An
         name = data["name"]
         if not isinstance(name, str) or not name or name in names:
             raise KitError(f"{metadata_path}: agent name must be unique and non-empty")
+        # Names become filenames in each generated harness tree. Keep them a
+        # conservative identifier component rather than allowing path syntax.
+        if name in (".", "..") or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for character in name):
+            raise KitError(f"{metadata_path}: agent name must be a safe identifier component")
         names.add(name)
         tier = data["model_tier"]
         tools = data["tools"]
@@ -141,9 +145,25 @@ def validate_catalog(policy: dict[str, Any], agents: list[Agent], harness: str) 
                     raise KitError(f"{agent.name}: unknown tool capability {tool!r} for Pi")
 
 
+def toml_string(value: str) -> str:
+    """Encode a TOML basic string without interpreting authored prompt text."""
+    # JSON's string escaping is identical to TOML's basic-string escaping for
+    # the characters relevant here, and ensure_ascii=False preserves Unicode.
+    # TOML also forbids DEL (which JSON leaves unescaped).
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
 def render(policy: dict[str, Any], agents: list[Agent], harness: str) -> dict[Path, str]:
     files: dict[Path, str] = {}
     for agent in agents:
+        if harness in ("all", "codex"):
+            codex = "\n".join((
+                f"name = {toml_string(agent.name)}",
+                f"description = {toml_string(agent.description)}",
+                f"developer_instructions = {toml_string(agent.prompt)}",
+                "",
+            ))
+            files[GENERATED / "codex/agents" / f"{agent.name}.toml"] = codex
         if harness in ("all", "claude"):
             claude = [
                 "---", f"name: {agent.name}", f"description: {agent.description}",
@@ -170,11 +190,32 @@ def render(policy: dict[str, Any], agents: list[Agent], harness: str) -> dict[Pa
     return files
 
 
+def validate_generated_destination(destination: Path) -> None:
+    """Reject generated paths whose existing ancestors can redirect writes."""
+    try:
+        relative = destination.relative_to(ROOT)
+    except ValueError as error:
+        raise KitError(f"generated destination is outside repository: {destination}") from error
+    current = ROOT
+    if current.is_symlink() or not current.is_dir():
+        raise KitError(f"refusing unsafe repository root: {current}")
+    for part in relative.parts:
+        current /= part
+        if current.is_symlink():
+            raise KitError(f"refusing symlinked generated ancestor: {current}")
+        if current.exists() and not current.is_dir():
+            raise KitError(f"refusing non-directory generated ancestor: {current}")
+
+
 def materialize(files: dict[Path, str], harness: str) -> None:
-    for selected in ("claude", "pi"):
-        if harness not in ("all", selected):
-            continue
-        destination = GENERATED / selected
+    selected_harnesses = [selected for selected in ("claude", "pi", "codex") if harness in ("all", selected)]
+    # Preflight every selected tree before creating any replacement or output.
+    # In particular, mkdir/rename must never follow a symlinked .generated.
+    destinations = {selected: GENERATED / selected for selected in selected_harnesses}
+    for destination in destinations.values():
+        validate_generated_destination(destination)
+    for selected in selected_harnesses:
+        destination = destinations[selected]
         temporary_root = Path(tempfile.mkdtemp(prefix="harness-kit-", dir=ROOT))
         temporary = temporary_root / selected
         try:
@@ -185,17 +226,65 @@ def materialize(files: dict[Path, str], harness: str) -> None:
                     generated = temporary / relative
                     generated.parent.mkdir(parents=True, exist_ok=True)
                     generated.write_text(content)
+            # Revalidate immediately before the destructive replacement and
+            # again before rename so a changed ancestor fails closed.
+            validate_generated_destination(destination)
             if destination.exists():
                 shutil.rmtree(require_relative_to(destination, ROOT))
+            validate_generated_destination(destination)
             destination.parent.mkdir(parents=True, exist_ok=True)
+            validate_generated_destination(destination)
             temporary.rename(destination)
         finally:
             shutil.rmtree(require_relative_to(temporary_root, ROOT), ignore_errors=True)
 
 
+def codex_home() -> Path:
+    """Return a Codex home that is strictly contained by the physical HOME."""
+    user_home = home()
+    value = os.environ.get("CODEX_HOME")
+    if value is None:
+        resolved = user_home / ".codex"
+    elif not value:
+        raise KitError("CODEX_HOME must not be empty")
+    else:
+        # Inspect the raw expanded spelling first. pathlib removes dot
+        # components while constructing a Path, so checking candidate.parts
+        # cannot distinguish an authored "." or ".." from a normalized path.
+        expanded = os.path.expanduser(value)
+        if any(component in (".", "..") for component in expanded.split(os.sep)):
+            raise KitError("CODEX_HOME must not contain dot path components")
+        candidate = Path(expanded)
+        if not candidate.is_absolute():
+            raise KitError("CODEX_HOME must be an absolute path")
+        resolved = Path(os.path.abspath(candidate))
+    if resolved == user_home or len(resolved.parts) <= len(user_home.parts):
+        raise KitError(f"CODEX_HOME resolves to a suspiciously shallow path: {resolved}")
+    try:
+        resolved.relative_to(user_home)
+    except ValueError as error:
+        raise KitError(f"CODEX_HOME must be within HOME: {resolved}") from error
+    # Check every existing component, including ancestors before CODEX_HOME.
+    # Do not use resolve() here: symlink substitution is precisely what must
+    # be rejected rather than silently normalized.
+    current = user_home
+    for component in resolved.relative_to(user_home).parts:
+        current /= component
+        if current.is_symlink():
+            raise KitError(f"refusing CODEX_HOME with symlinked ancestor: {current}")
+        if current.exists() and not current.is_dir():
+            raise KitError(f"refusing CODEX_HOME with non-directory ancestor: {current}")
+    return resolved
+
+
 def desired_links(harness: str, agents: list[Agent], components: frozenset[str]) -> list[Link]:
     user_home = home()
     links: list[Link] = []
+    if harness in ("all", "codex") and "agents" in components:
+        destination_root = codex_home() / "agents"
+        for agent in agents:
+            agent_file = GENERATED / "codex/agents" / f"{agent.name}.toml"
+            links.append(Link(destination_root / agent_file.name, agent_file))
     if harness in ("all", "claude"):
         if "instructions" in components:
             links.append(Link(user_home / ".claude/CLAUDE.md", COMMON_INSTRUCTIONS))
@@ -220,14 +309,17 @@ def desired_links(harness: str, agents: list[Agent], components: frozenset[str])
     return links
 
 
-def validate_managed_ancestors(destination: Path) -> None:
+def validate_managed_ancestors(destination: Path, managed_root: Path | None = None) -> None:
     """Reject existing managed parents that could redirect a link mutation."""
-    user_home = home()
+    if managed_root is None:
+        managed_root = home()
     try:
-        relative_parent = destination.parent.relative_to(user_home)
+        relative_parent = destination.parent.relative_to(managed_root)
     except ValueError as error:
-        raise KitError(f"managed destination is outside HOME: {destination}") from error
-    parent = user_home
+        raise KitError(f"managed destination is outside its safety boundary: {destination}") from error
+    parent = managed_root
+    if parent.is_symlink():
+        raise KitError(f"refusing managed destination with symlinked ancestor: {parent}")
     if parent.exists() and not parent.is_dir():
         raise KitError(f"refusing managed destination with non-directory ancestor: {parent}")
     for part in relative_parent.parts:
@@ -249,7 +341,8 @@ def validate_operation_preconditions(operation: Operation) -> None:
     if operation.link is None:
         return
     path = operation.link.destination
-    validate_managed_ancestors(path)
+    managed_root = codex_home() if operation.link.target.is_relative_to(GENERATED / "codex") else None
+    validate_managed_ancestors(path, managed_root)
     exists = path.exists() or path.is_symlink()
     if operation.action == "create":
         if exists:
@@ -259,7 +352,8 @@ def validate_operation_preconditions(operation: Operation) -> None:
 def link_operations(harness: str, agents: list[Agent], components: frozenset[str]) -> list[Operation]:
     operations: list[Operation] = []
     for link in desired_links(harness, agents, components):
-        validate_managed_ancestors(link.destination)
+        managed_root = codex_home() if link.target.is_relative_to(GENERATED / "codex") else None
+        validate_managed_ancestors(link.destination, managed_root)
         current = link_target(link.destination)
         if not link.destination.exists() and not link.destination.is_symlink():
             operations.append(Operation("create", link=link))
@@ -274,7 +368,7 @@ def install_plan(harness: str, agents: list[Agent], components: frozenset[str]) 
     """The ordered Install plan: generation, Pi bootstrap, then desired links."""
     operations: list[Operation] = []
     if "agents" in components:
-        generated_paths = [GENERATED / selected / "agents" for selected in ("claude", "pi") if harness in ("all", selected)]
+        generated_paths = [GENERATED / selected / "agents" for selected in ("claude", "pi", "codex") if harness in ("all", selected)]
         operations.append(Operation("render", f"generate selected agent trees at {', '.join(map(str, generated_paths))}"))
         if harness in ("all", "pi"):
             operations.extend((
@@ -295,14 +389,23 @@ def print_plan(operations: list[Operation]) -> None:
             print(f"{action:12} {operation.link.destination} -> {operation.link.target}{suffix}")
 
 
+def validate_generated_trees(harness: str) -> None:
+    """Reject selected generated trees that could redirect reads or writes."""
+    for selected in ("claude", "pi", "codex"):
+        if harness in ("all", selected):
+            validate_generated_destination(GENERATED / selected / "agents")
+
+
 def verify_generated(files: dict[Path, str], harness: str) -> bool:
-    if not all(path.is_file() and path.read_text() == content for path, content in files.items()):
+    validate_generated_trees(harness)
+    if not all(path.is_file() and not path.is_symlink() and path.read_text() == content for path, content in files.items()):
         return False
-    for selected in ("claude", "pi"):
+    for selected in ("claude", "pi", "codex"):
         if harness in ("all", selected):
             root = GENERATED / selected
             expected = {path for path in files if path.is_relative_to(root)}
-            actual = set(root.glob("**/*.md"))
+            extension = "*.toml" if selected == "codex" else "*.md"
+            actual = set(root.glob(f"**/{extension}"))
             if actual != expected:
                 return False
     return True
@@ -335,6 +438,9 @@ def install(harness: str, components: frozenset[str]) -> int:
             validate_operation_preconditions(operation)
             assert operation.link is not None
             path = operation.link.destination
+            # Revalidate after any preceding operation and immediately before
+            # mkdir/symlink, including Codex's separate managed root.
+            validate_operation_preconditions(operation)
             path.parent.mkdir(parents=True, exist_ok=True)
             try:
                 path.symlink_to(operation.link.target)
@@ -378,7 +484,7 @@ def main(argv: list[str] | None = None) -> int:
     subcommands = parser.add_subparsers(dest="command", required=True, metavar="{preview,install,check}")
     for command in ("preview", "install", "check"):
         item = subcommands.add_parser(command, help=COMMAND_HELP[command], description=COMMAND_HELP[command])
-        item.add_argument("--harness", choices=("all", "claude", "pi"), default="all", help="limit to this harness (default: all)")
+        item.add_argument("--harness", choices=("all", "claude", "pi", "codex"), default="all", help="limit to this harness (default: all)")
         item.add_argument("--component", action="append", choices=("skills", "agents", "instructions"), help="deploy only this component (repeatable)")
     args = parser.parse_args(argv)
     components = frozenset(args.component) if args.component else COMPONENTS
@@ -388,6 +494,8 @@ def main(argv: list[str] | None = None) -> int:
             # Render validation is intentionally performed without writing output.
             if agents:
                 render(policy, agents, args.harness)
+                if "agents" in components:
+                    validate_generated_trees(args.harness)
             operations = install_plan(args.harness, agents, components)
             print_plan(operations)
             return 2 if any(operation.action == "conflict" for operation in operations) else 0
