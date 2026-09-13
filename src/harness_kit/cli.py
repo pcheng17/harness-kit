@@ -28,10 +28,12 @@ class Agent:
     name: str
     description: str
     tier: str
+    reasoning_effort: str
     tools: tuple[str, ...]
     prompt: str
     claude: dict[str, Any]
     pi: dict[str, Any]
+    codex: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -86,7 +88,7 @@ def load_catalog(harness: str, components: frozenset[str]) -> tuple[dict[str, An
         prompt_path = metadata_path.with_name("prompt.md")
         if not prompt_path.is_file():
             raise KitError(f"missing prompt: {prompt_path}")
-        required = ("name", "description", "model_tier", "tools")
+        required = ("name", "description", "model_tier", "reasoning_effort", "tools")
         missing = [field for field in required if field not in data]
         if missing:
             raise KitError(f"{metadata_path}: missing {', '.join(missing)}")
@@ -99,14 +101,21 @@ def load_catalog(harness: str, components: frozenset[str]) -> tuple[dict[str, An
             raise KitError(f"{metadata_path}: agent name must be a safe identifier component")
         names.add(name)
         tier = data["model_tier"]
+        reasoning_effort = data["reasoning_effort"]
         tools = data["tools"]
-        if not isinstance(data["description"], str) or not isinstance(tier, str) or not isinstance(tools, list) or not all(isinstance(tool, str) for tool in tools):
-            raise KitError(f"{metadata_path}: invalid description, model_tier, or tools")
-        agents.append(Agent(name, data["description"], tier, tuple(tools), prompt_path.read_text(), data.get("claude", {}), data.get("pi", {})))
+        if not isinstance(data["description"], str) or not isinstance(tier, str) or not isinstance(reasoning_effort, str) or not reasoning_effort or not isinstance(tools, list) or not all(isinstance(tool, str) for tool in tools):
+            raise KitError(f"{metadata_path}: invalid description, model_tier, reasoning_effort, or tools")
+        agents.append(Agent(name, data["description"], tier, reasoning_effort, tuple(tools), prompt_path.read_text(), data.get("claude", {}), data.get("pi", {}), data.get("codex", {})))
     if not agents:
         raise KitError("no agents found")
     validate_catalog(policy, agents, harness)
     return policy, agents
+
+
+def validate_effort(agent: Agent, metadata: dict[str, Any], field: str, harness: str) -> None:
+    value = metadata.get(field, agent.reasoning_effort)
+    if not isinstance(value, str) or not value:
+        raise KitError(f"{agent.name}: {harness} {field} must be a non-empty string")
 
 
 def validate_catalog(policy: dict[str, Any], agents: list[Agent], harness: str) -> None:
@@ -126,6 +135,7 @@ def validate_catalog(policy: dict[str, Any], agents: list[Agent], harness: str) 
                 raise KitError(f"policy.toml missing {error}") from error
             if agent.tier not in claude_models:
                 raise KitError(f"{agent.name}: unknown model tier {agent.tier!r} for Claude")
+            validate_effort(agent, agent.claude, "effort", "Claude")
             for tool in agent.tools:
                 if tool not in claude_tools:
                     raise KitError(f"{agent.name}: unknown tool capability {tool!r} for Claude")
@@ -138,11 +148,27 @@ def validate_catalog(policy: dict[str, Any], agents: list[Agent], harness: str) 
             except KeyError as error:
                 raise KitError(f"policy.toml missing {error}") from error
             provider = agent.pi.get("provider", "codex")
-            if provider not in pi_models or agent.tier not in pi_models[provider]:
+            if not isinstance(provider, str) or provider not in pi_models or agent.tier not in pi_models[provider]:
                 raise KitError(f"{agent.name}: unknown Pi provider/tier {provider!r}/{agent.tier!r}")
+            validate_effort(agent, agent.pi, "thinking", "Pi")
             for tool in agent.tools:
                 if tool not in pi_tools:
                     raise KitError(f"{agent.name}: unknown tool capability {tool!r} for Pi")
+        if harness in ("all", "codex"):
+            if not isinstance(agent.codex, dict):
+                raise KitError(f"{agent.name}: Codex metadata must be a table")
+            try:
+                codex_models = models["codex"]
+            except KeyError as error:
+                raise KitError(f"policy.toml missing {error}") from error
+            if agent.tier not in codex_models:
+                raise KitError(f"{agent.name}: unknown model tier {agent.tier!r} for Codex")
+            model = codex_models[agent.tier]
+            if not isinstance(model, str) or not model:
+                raise KitError(f"{agent.name}: invalid Codex model for tier {agent.tier!r}")
+            if "model" in agent.codex and (not isinstance(agent.codex["model"], str) or not agent.codex["model"]):
+                raise KitError(f"{agent.name}: Codex model must be a non-empty string")
+            validate_effort(agent, agent.codex, "model_reasoning_effort", "Codex")
 
 
 def toml_string(value: str) -> str:
@@ -160,6 +186,8 @@ def render(policy: dict[str, Any], agents: list[Agent], harness: str) -> dict[Pa
             codex = "\n".join((
                 f"name = {toml_string(agent.name)}",
                 f"description = {toml_string(agent.description)}",
+                f"model = {toml_string(agent.codex.get('model', policy['models']['codex'][agent.tier]))}",
+                f"model_reasoning_effort = {toml_string(agent.codex.get('model_reasoning_effort', agent.reasoning_effort))}",
                 f"developer_instructions = {toml_string(agent.prompt)}",
                 "",
             ))
@@ -169,6 +197,7 @@ def render(policy: dict[str, Any], agents: list[Agent], harness: str) -> dict[Pa
                 "---", f"name: {agent.name}", f"description: {agent.description}",
                 f"tools: {', '.join(policy['tools']['claude'][tool] for tool in agent.tools)}",
                 f"model: {policy['models']['claude'][agent.tier]}",
+                f"effort: {agent.claude.get('effort', agent.reasoning_effort)}",
             ]
             if color := agent.claude.get("color"):
                 claude.append(f"color: {color}")
@@ -181,7 +210,7 @@ def render(policy: dict[str, Any], agents: list[Agent], harness: str) -> dict[Pa
                 f"tools: {', '.join(policy['tools']['pi'][tool] for tool in agent.tools)}",
                 f"model: {policy['models']['pi'][provider][agent.tier]}",
             ]
-            pi.append(f"thinking: {agent.pi.get('thinking', 'medium')}")
+            pi.append(f"thinking: {agent.pi.get('thinking', agent.reasoning_effort)}")
             if "isolated" in agent.pi:
                 value = str(agent.pi["isolated"]).lower() if isinstance(agent.pi["isolated"], bool) else agent.pi["isolated"]
                 pi.append(f"isolated: {value}")

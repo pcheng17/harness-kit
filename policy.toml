@@ -4,6 +4,12 @@ standard = "sonnet"
 strong = "opus"
 frontier = "fable"
 
+[models.codex]
+fast = "gpt-5.6-luna"
+standard = "gpt-5.6-terra"
+strong = "gpt-5.6-sol"
+frontier = "gpt-6-astra"
+
 [models.pi.codex]
 fast = "openai-codex/gpt-5.6-luna"
 standard = "openai-codex/gpt-5.6-terra"

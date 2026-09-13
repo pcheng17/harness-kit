@@ -1,6 +1,7 @@
 name = "debugger"
 description = "Root-causes hard bugs; only used when the Builder or Refuter can't isolate a cause"
 model_tier = "strong"
+reasoning_effort = "medium"
 tools = ["read", "grep", "find", "bash", "edit"]
 
 [claude]
