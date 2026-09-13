@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -95,7 +96,7 @@ def subprocess_environment(sandbox: Sandbox, environment_override: dict[str, str
         command.write_text("#!/bin/sh\nprintf '%s|%s %s\\n' \"$PWD\" \"$0\" \"$*\" >> \"$HARNESS_LOG\"\n[ -z \"${HARNESS_SHIM_HOOK:-}\" ] || \"$HARNESS_SHIM_HOOK\" \"$0\"\n")
         command.chmod(0o755)
     environment = {
-        "HOME": str(sandbox.root / "home"), "CODEX_HOME": str(sandbox.root / "codex-home"),
+        "HOME": str(sandbox.root / "home"), "CODEX_HOME": str(sandbox.root / "home/codex-home"),
         "XDG_CONFIG_HOME": str(sandbox.root / "xdg/config"),
         "XDG_CACHE_HOME": str(sandbox.root / "xdg/cache"), "XDG_DATA_HOME": str(sandbox.root / "xdg/data"),
         "TMPDIR": str(sandbox.root / "tmp"), "NPM_CONFIG_USERCONFIG": str(sandbox.root / "npm/config/npmrc"),
@@ -111,6 +112,9 @@ def subprocess_environment(sandbox: Sandbox, environment_override: dict[str, str
     for key, value in (environment_override or {}).items():
         if key in _MUTATION_ENVIRONMENT_PATHS:
             if value is None:
+                if key == "CODEX_HOME":
+                    environment.pop(key, None)
+                    continue
                 raise RuntimeError(f"mutating subprocess environment removes sandbox boundary: {key}")
             candidate = Path(value)
             if not candidate.is_absolute() or not candidate.resolve().is_relative_to(sandbox.root.resolve()):
@@ -275,6 +279,7 @@ class HarnessKitTests(unittest.TestCase):
             (".agents/skills", "pi", "skills"),
             (".pi", "pi", "instructions"),
             (".pi/agent", "pi", "instructions"),
+            ("codex-home", "codex", "agents"),
         )
         for parent_relative, harness, component in families:
             with self.subTest(parent=parent_relative), temporary_sandbox() as sandbox:
@@ -293,7 +298,7 @@ class HarnessKitTests(unittest.TestCase):
                     self.assertFalse((sandbox.root / "commands").exists())
 
     def test_managed_parent_files_fail_closed_for_every_family(self) -> None:
-        families = (".claude", ".claude/agents", ".claude/skills", ".agents", ".agents/skills", ".pi", ".pi/agent")
+        families = (".claude", ".claude/agents", ".claude/skills", ".agents", ".agents/skills", ".pi", ".pi/agent", "codex-home")
         for parent_relative in families:
             with self.subTest(parent=parent_relative), temporary_sandbox() as sandbox:
                 parent = sandbox.root / "home" / parent_relative
@@ -413,6 +418,224 @@ class HarnessKitTests(unittest.TestCase):
         agent = self.path / "home/.claude/agents/scout.md"
         self.assertTrue(agent.is_symlink())
         self.assertTrue((self.path / "home/.claude/CLAUDE.md").is_symlink())
+
+    def test_codex_agents_render_required_toml_fields(self) -> None:
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        generated = self.project / ".generated/codex/agents/scout.toml"
+        data = tomllib.loads(generated.read_text())
+        self.assertEqual(set(data), {"name", "description", "developer_instructions"})
+        self.assertEqual(data["name"], "scout")
+        self.assertEqual(data["developer_instructions"], (self.project / "content/agents/scout/prompt.md").read_text())
+        self.assertTrue((self.path / "home/codex-home/agents/scout.toml").is_symlink())
+        self.assertFalse((self.path / "commands").exists())
+
+    def test_codex_render_round_trips_authored_special_characters(self) -> None:
+        prompt = 'quotes " and /slashes/ and \\slashes\\\nmultiline\ntriple """ unicode λ DEL \x7f low \x00\x01\x0b\t'
+        prompt_path = self.project / "content/agents/scout/prompt.md"
+        prompt_path.write_text(prompt)
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = tomllib.loads((self.project / ".generated/codex/agents/scout.toml").read_text())
+        self.assertEqual(rendered["developer_instructions"], prompt)
+
+    def test_codex_matching_agent_check_is_noop_and_preserves_link(self) -> None:
+        self.assertEqual(invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents").returncode, 0)
+        destination = self.path / "home/codex-home/agents/scout.toml"
+        original = destination.readlink()
+        result = invoke(self.sandbox, "check", "--harness", "codex", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(destination.readlink(), original)
+        self.assertNotIn("[CREATE]", result.stdout)
+
+    def test_codex_generated_ancestor_symlink_fails_without_external_mutation(self) -> None:
+        outside = self.path / "outside-generated"
+        outside.mkdir()
+        sentinel = outside / "sentinel"
+        sentinel.write_text("protected\n")
+        (self.project / ".generated").symlink_to(outside, target_is_directory=True)
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(sentinel.read_text(), "protected\n")
+        self.assertEqual(sorted(path.name for path in outside.iterdir()), ["sentinel"])
+
+    def test_all_agents_explicitly_renders_codex_and_runs_pi_bootstrap_once(self) -> None:
+        result = invoke(self.sandbox, "install", "--harness", "all", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        commands = (self.path / "commands").read_text().splitlines()
+        self.assertEqual(len(commands), 2)
+        self.assertEqual(sum("/npm " in line for line in commands), 1)
+        self.assertEqual(sum("/pi " in line for line in commands), 1)
+        self.assertTrue((self.project / ".generated/codex/agents/scout.toml").is_file())
+        self.assertTrue((self.path / "home/codex-home/agents/scout.toml").is_symlink())
+
+    def test_codex_check_routes_convergence_and_repairs_generated_drift(self) -> None:
+        install = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents")
+        self.assertEqual(install.returncode, 0, install.stderr)
+        check = invoke(self.sandbox, "check", "--harness", "codex", "--component", "agents")
+        self.assertEqual(check.returncode, 0, check.stderr)
+        generated = self.project / ".generated/codex/agents/scout.toml"
+        generated.write_text("broken = true\n")
+        drift = invoke(self.sandbox, "check", "--harness", "codex", "--component", "agents")
+        self.assertEqual(drift.returncode, 1)
+        repaired = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents")
+        self.assertEqual(repaired.returncode, 0, repaired.stderr)
+        generated.unlink()
+        missing = invoke(self.sandbox, "check", "--harness", "codex", "--component", "agents")
+        self.assertEqual(missing.returncode, 1)
+        stale = self.project / ".generated/codex/agents/stale.toml"
+        stale.write_text("stale = true\n")
+        stale_check = invoke(self.sandbox, "check", "--harness", "codex", "--component", "agents")
+        self.assertEqual(stale_check.returncode, 1)
+        repaired = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents")
+        self.assertEqual(repaired.returncode, 0, repaired.stderr)
+        self.assertFalse(stale.exists())
+
+    def test_codex_install_conflicts_preserve_regular_and_mismatched_destinations(self) -> None:
+        destination = self.path / "home/codex-home/agents/scout.toml"
+        destination.parent.mkdir(parents=True)
+        regular = "foreign\n"
+        destination.write_text(regular)
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(destination.read_text(), regular)
+        destination.unlink()
+        foreign = self.path / "foreign.toml"
+        foreign.write_text("foreign\n")
+        destination.symlink_to(foreign)
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(destination.resolve(), foreign.resolve())
+        destination.unlink()
+        matching = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents")
+        self.assertEqual(matching.returncode, 0, matching.stderr)
+        self.assertTrue(destination.is_symlink())
+
+    def test_codex_render_preserves_other_generated_harnesses(self) -> None:
+        self.assertEqual(invoke(self.sandbox, "install", "--harness", "claude", "--component", "agents").returncode, 0)
+        claude = self.project / ".generated/claude/agents/scout.md"
+        original = claude.read_text()
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(claude.read_text(), original)
+
+    def test_codex_then_other_harness_preserves_generated_tree(self) -> None:
+        first = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        codex = self.project / ".generated/codex/agents/scout.toml"
+        original = codex.read_text()
+        second = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(codex.read_text(), original)
+
+    def test_codex_preview_is_read_only_and_lists_codex_operations(self) -> None:
+        result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[RENDER]", result.stdout)
+        self.assertIn("codex/agents", result.stdout)
+        self.assertIn("[CREATE]", result.stdout)
+        self.assertIn("codex-home/agents/scout.toml", result.stdout)
+        self.assertFalse((self.project / ".generated").exists())
+        self.assertFalse((self.path / "home/codex-home").exists())
+
+    def test_codex_agents_default_home_and_safe_override(self) -> None:
+        default = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents", environment_override={"CODEX_HOME": None})
+        self.assertEqual(default.returncode, 0, default.stderr)
+        self.assertTrue((self.path / "home/.codex/agents/scout.toml").is_symlink())
+        override = self.path / "home/custom/codex"
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents", environment_override={"CODEX_HOME": str(override)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((override / "agents/scout.toml").is_symlink())
+
+    def test_codex_agents_do_not_install_skills_or_instructions(self) -> None:
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.path / "home/.claude").exists())
+        self.assertFalse((self.path / "home/.agents").exists())
+        self.assertFalse((self.path / "home/.pi").exists())
+
+    def test_codex_agents_reject_unsafe_codex_home(self) -> None:
+        target = self.path / "home/codex-target"
+        target.mkdir(parents=True)
+        link = self.path / "home/codex-link"
+        link.symlink_to(target, target_is_directory=True)
+        result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents", environment_override={"CODEX_HOME": str(link)})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("symlinked ancestor", result.stderr)
+        self.assertFalse((self.path / "commands").exists())
+
+    def test_codex_generated_file_ancestors_fail_closed_without_mutation(self) -> None:
+        for relative in (".generated", ".generated/codex"):
+            with self.subTest(relative=relative):
+                ancestor = self.project / relative
+                ancestor.parent.mkdir(parents=True, exist_ok=True)
+                ancestor.write_text("protected\n")
+                result = invoke(self.sandbox, "check", "--harness", "codex", "--component", "agents")
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(ancestor.read_text(), "protected\n")
+                ancestor.unlink()
+
+    def test_codex_install_revalidates_managed_root_race(self) -> None:
+        outside = self.path / "outside-codex"
+        outside.mkdir()
+        canary = outside / "canary"
+        canary.write_text("protected\n")
+        managed = self.path / "home/codex-home"
+        managed.mkdir(parents=True)
+        hook = self.path / "shim-hook"
+        hook.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/rm -rf \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
+            % (self.path, managed, outside, managed)
+        )
+        hook.chmod(0o755)
+        result = invoke(self.sandbox, "install", "--harness", "all", "--component", "agents")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("symlinked ancestor", result.stderr)
+        self.assertEqual(canary.read_text(), "protected\n")
+        self.assertFalse((outside / "agents").exists())
+
+    def test_codex_agents_reject_symlinked_and_file_managed_ancestors(self) -> None:
+        outside = self.path / "outside-codex"
+        outside.mkdir()
+        ancestor = self.path / "home/codex-ancestor"
+        ancestor.parent.mkdir(parents=True)
+        for replacement in ("symlink", "file"):
+            with self.subTest(replacement=replacement):
+                if ancestor.is_symlink() or ancestor.exists():
+                    if ancestor.is_dir() and not ancestor.is_symlink():
+                        shutil.rmtree(ancestor)
+                    else:
+                        ancestor.unlink()
+                if replacement == "symlink":
+                    ancestor.symlink_to(outside, target_is_directory=True)
+                else:
+                    ancestor.write_text("not a directory\n")
+                result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents", environment_override={"CODEX_HOME": str(ancestor / "codex")})
+                self.assertEqual(result.returncode, 2)
+
+    def test_codex_agents_reject_raw_dot_components_before_mutation(self) -> None:
+        for component in (".", ".."):
+            with self.subTest(component=component):
+                sentinel = self.path / "home/codex-sentinel"
+                sentinel.parent.mkdir(parents=True, exist_ok=True)
+                sentinel.write_text("protected\n")
+                value = str(self.path / "home") + f"/{component}/codex-target"
+                result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents", environment_override={"CODEX_HOME": value})
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(sentinel.read_text(), "protected\n")
+                self.assertFalse((self.project / ".generated").exists())
+
+    def test_unsafe_agent_name_fails_before_mutation(self) -> None:
+        canary = self.project.parent / "outside-canary"
+        canary.write_text("protected\\n")
+        metadata = self.project / "content/agents/scout/agent.toml"
+        metadata.write_text(metadata.read_text().replace('name = "scout"', 'name = "../../outside-canary"'))
+        result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "agents")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("safe identifier", result.stderr)
+        self.assertEqual(canary.read_text(), "protected\\n")
+        self.assertFalse((self.project / ".generated").exists())
 
     def test_pi_agents_default_to_medium_thinking(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "pi")
