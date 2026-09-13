@@ -277,6 +277,15 @@ def codex_home() -> Path:
     return resolved
 
 
+def shared_skill_links(user_home: Path) -> list[Link]:
+    """Build the single user-level skill family shared by Pi and Codex."""
+    return [
+        Link(user_home / ".agents/skills" / skill.name, skill)
+        for skill in sorted((ROOT / "content/skills").iterdir())
+        if skill.is_dir() and (skill / "SKILL.md").is_file()
+    ]
+
+
 def desired_links(harness: str, agents: list[Agent], components: frozenset[str]) -> list[Link]:
     user_home = home()
     links: list[Link] = []
@@ -296,16 +305,16 @@ def desired_links(harness: str, agents: list[Agent], components: frozenset[str])
             for skill in sorted((ROOT / "content/skills").iterdir()):
                 if skill.is_dir() and (skill / "SKILL.md").is_file():
                     links.append(Link(user_home / ".claude/skills" / skill.name, skill))
+    if harness in ("all", "pi", "codex"):
+        # Pi and Codex intentionally consume the same user-level skill links.
+        if "skills" in components:
+            links.extend(shared_skill_links(user_home))
     if harness in ("all", "pi"):
         if "instructions" in components:
             links.extend((
                 Link(user_home / ".agents/AGENTS.md", COMMON_INSTRUCTIONS),
                 Link(user_home / ".pi/agent/AGENTS.md", COMMON_INSTRUCTIONS),
             ))
-        if "skills" in components:
-            for skill in sorted((ROOT / "content/skills").iterdir()):
-                if skill.is_dir() and (skill / "SKILL.md").is_file():
-                    links.append(Link(user_home / ".agents/skills" / skill.name, skill))
     return links
 
 

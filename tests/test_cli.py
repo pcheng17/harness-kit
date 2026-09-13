@@ -239,6 +239,114 @@ class HarnessKitTests(unittest.TestCase):
         check = invoke(self.sandbox, "check", "--component", "skills")
         self.assertEqual(check.returncode, 0, check.stderr)
 
+    def test_codex_skills_only_uses_shared_agents_destination(self) -> None:
+        preview = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "skills")
+        self.assertEqual(preview.returncode, 0, preview.stderr)
+        self.assertIn(".agents/skills/code-review", preview.stdout)
+        self.assertNotIn("codex-home", preview.stdout)
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "skills")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        destination = self.path / "home/.agents/skills/code-review"
+        self.assertTrue(destination.is_symlink())
+        self.assertEqual(destination.resolve(), self.project / "content/skills/code-review")
+
+    def test_all_plans_each_shared_skill_once(self) -> None:
+        result = invoke(self.sandbox, "preview", "--harness", "all", "--component", "skills")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.count(".agents/skills/code-review"), 1)
+
+    def test_codex_skills_only_does_not_render_agents_or_run_commands(self) -> None:
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "skills")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.project / ".generated").exists())
+        self.assertFalse((self.path / "commands").exists())
+        self.assertFalse((self.path / "home/.claude").exists())
+        self.assertFalse((self.path / "home/.pi").exists())
+
+    def test_codex_shared_skill_matching_pi_link_is_noop(self) -> None:
+        self.assertEqual(invoke(self.sandbox, "install", "--harness", "pi", "--component", "skills").returncode, 0)
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "skills")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("[CREATE]", result.stdout)
+        self.assertIn("[NOOP]", result.stdout)
+
+    def test_pi_shared_skill_matching_codex_link_is_noop(self) -> None:
+        self.assertEqual(invoke(self.sandbox, "install", "--harness", "codex", "--component", "skills").returncode, 0)
+        result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "skills")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("[CREATE]", result.stdout)
+        self.assertIn("[NOOP]", result.stdout)
+
+    def test_pi_and_codex_skill_installs_are_idempotent(self) -> None:
+        first = invoke(self.sandbox, "install", "--harness", "codex", "--component", "skills")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        second = invoke(self.sandbox, "install", "--harness", "pi", "--component", "skills")
+        self.assertEqual(second.returncode, 0, second.stderr)
+        check = invoke(self.sandbox, "check", "--harness", "codex", "--component", "skills")
+        self.assertEqual(check.returncode, 0, check.stderr)
+
+    def test_codex_shared_skill_parent_symlink_and_file_fail_closed(self) -> None:
+        outside = self.path / "outside"
+        outside.mkdir()
+        parent = self.path / "home/.agents/skills"
+        parent.parent.mkdir(parents=True)
+        parent.symlink_to(outside, target_is_directory=True)
+        result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "skills")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("symlinked ancestor", result.stderr)
+        parent.unlink()
+        parent.write_text("protected\n")
+        result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "skills")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("non-directory ancestor", result.stderr)
+
+    def test_codex_shared_skill_create_is_revalidated_before_linking(self) -> None:
+        outside = self.path / "outside"
+        outside.mkdir()
+        canary = outside / "canary"
+        canary.write_text("protected\n")
+        parent = self.path / "home/.agents/skills"
+        hook = self.path / "shim-hook"
+        hook.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/mkdir -p \"%s\"; /bin/rm -rf \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
+            % (self.path, parent.parent, parent, outside, parent)
+        )
+        hook.chmod(0o755)
+        result = invoke(self.sandbox, "install", "--harness", "all", "--component", "agents", "--component", "skills")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("symlinked ancestor", result.stderr)
+        self.assertEqual(canary.read_text(), "protected\n")
+        self.assertFalse((outside / "code-review").exists())
+
+    def test_codex_shared_skill_foreign_destinations_are_preserved(self) -> None:
+        destination = self.path / "home/.agents/skills/code-review"
+        destination.parent.mkdir(parents=True)
+        foreign = self.path / "foreign"
+        foreign.write_text("protected\n")
+        destination.write_text("also protected\n")
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "skills")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(destination.read_text(), "also protected\n")
+        destination.unlink()
+        destination.symlink_to(foreign)
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "skills")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(destination.resolve(), foreign.resolve())
+
+    def test_codex_skills_ignore_directories_without_skill_md(self) -> None:
+        ignored = self.project / "content/skills/no-skill-md"
+        ignored.mkdir()
+        result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "skills")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("no-skill-md", result.stdout)
+
+    def test_codex_component_scope_preserves_other_links(self) -> None:
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "skills")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.path / "home/codex-home/agents").exists())
+        self.assertFalse((self.project / ".generated").exists())
+
     def test_agents_only_gates_pi_commands_by_harness(self) -> None:
         claude = invoke(self.sandbox, "install", "--harness", "claude", "--component", "agents")
         self.assertEqual(claude.returncode, 0, claude.stderr)
