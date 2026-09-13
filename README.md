@@ -34,7 +34,7 @@ Installation is stateless: it does not record ownership or remove historical sta
 
 - `content/agents/`: generic declarative agents rendered for Claude, Pi, and Codex.
 - `content/skills/`: canonical skills linked individually to Claude's `~/.claude/skills` and the shared Pi/Codex user directory `~/.agents/skills`.
-- `content/instructions/AGENTS.md`: common global instructions deployed as `~/.claude/CLAUDE.md`, `~/.agents/AGENTS.md`, and `~/.pi/agent/AGENTS.md`.
+- `content/instructions/AGENTS.md`: common global instructions deployed as `~/.claude/CLAUDE.md`, `~/.agents/AGENTS.md`, `~/.pi/agent/AGENTS.md`, and `$CODEX_HOME/AGENTS.md` (default `~/.codex/AGENTS.md`). Codex reads a non-empty `$CODEX_HOME/AGENTS.override.md` instead, when present; Harness Kit leaves that user-owned override untouched and does not report it as drift.
 - `.generated/`: disposable rendered agents. Codex agents are TOML files and install under `$CODEX_HOME/agents` (default `~/.codex/agents`). `CODEX_HOME` must be non-empty, absolute, strictly inside the physical `HOME`, contain no `.` or `..` components, and have no symlinked or non-directory ancestors.
 
 Pi-specific agents have intentionally been removed. Generic agents are rendered into `.generated/pi/agents` and exposed through this checkout's Pi package.

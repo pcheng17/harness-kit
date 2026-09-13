@@ -978,6 +978,154 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn("pi install", commands)
         self.assertNotIn("pi remove", commands)
 
+    def test_codex_instructions_only_links_common_agents_file(self) -> None:
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        destination = self.path / "home/codex-home/AGENTS.md"
+        self.assertTrue(destination.is_symlink())
+        self.assertEqual(destination.resolve(), self.project / "content/instructions/AGENTS.md")
+        self.assertFalse((self.project / ".generated").exists())
+        self.assertFalse((self.path / "commands").exists())
+
+    def test_codex_instructions_use_default_codex_home(self) -> None:
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions", environment_override={"CODEX_HOME": None})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.path / "home/.codex/AGENTS.md").is_symlink())
+
+    def test_codex_instructions_respect_safe_codex_home_override(self) -> None:
+        override = self.path / "home/custom-codex"
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions", environment_override={"CODEX_HOME": str(override)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((override / "AGENTS.md").is_symlink())
+
+    def test_codex_instructions_reject_unsafe_codex_home(self) -> None:
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions", environment_override={"CODEX_HOME": str(self.path / "outside") + "/../home/codex"})
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse((self.path / "home").exists())
+
+    def test_codex_instructions_do_not_touch_agents_override(self) -> None:
+        override = self.path / "home/codex-home/AGENTS.override.md"
+        override.parent.mkdir(parents=True)
+        override.write_text("user instructions\n")
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(override.read_text(), "user instructions\n")
+
+    def test_codex_instructions_check_ignores_agents_override(self) -> None:
+        override = self.path / "home/codex-home/AGENTS.override.md"
+        override.parent.mkdir(parents=True)
+        override.write_text("user instructions\n")
+        self.assertEqual(invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions").returncode, 0)
+        result = invoke(self.sandbox, "check", "--harness", "codex", "--component", "instructions")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_codex_instruction_matching_link_is_noop(self) -> None:
+        self.assertEqual(invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions").returncode, 0)
+        result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "instructions")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[NOOP]", result.stdout)
+        self.assertNotIn("[CREATE]", result.stdout)
+
+    def test_codex_instruction_foreign_file_and_symlink_conflicts_are_preserved(self) -> None:
+        destination = self.path / "home/codex-home/AGENTS.md"
+        destination.parent.mkdir(parents=True)
+        destination.write_text("protected\n")
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(destination.read_text(), "protected\n")
+        destination.unlink()
+        foreign = self.path / "foreign"
+        foreign.write_text("foreign\n")
+        destination.symlink_to(foreign)
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(destination.resolve(), foreign)
+
+    def test_codex_instruction_parent_symlink_and_file_fail_closed(self) -> None:
+        outside = self.path / "outside"
+        outside.mkdir()
+        parent = self.path / "home/codex-home"
+        parent.parent.mkdir(parents=True)
+        parent.symlink_to(outside, target_is_directory=True)
+        result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "instructions")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        parent.unlink()
+        parent.write_text("protected\n")
+        result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "instructions")
+        self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_codex_instructions_only_does_not_render_or_run_commands(self) -> None:
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.path / "commands").exists())
+        self.assertFalse((self.project / ".generated").exists())
+        self.assertFalse((self.path / "home/.claude").exists())
+        self.assertFalse((self.path / "home/.pi").exists())
+
+    def test_codex_instructions_only_does_not_create_other_harness_paths(self) -> None:
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.path / "home/.claude").exists())
+        self.assertFalse((self.path / "home/.agents").exists())
+        self.assertFalse((self.path / "home/.pi").exists())
+
+    def test_all_includes_codex_instructions_once(self) -> None:
+        result = invoke(self.sandbox, "preview", "--harness", "all", "--component", "instructions")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.count("codex-home/AGENTS.md"), 1)
+
+    def test_missing_common_instructions_blocks_codex_install_before_mutation(self) -> None:
+        source = self.project / "content/instructions/AGENTS.md"
+        source.unlink()
+        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse((self.path / "home").exists())
+
+    def test_codex_instruction_create_is_revalidated_before_linking(self) -> None:
+        outside = self.path / "outside"
+        outside.mkdir()
+        canary = outside / "canary"
+        canary.write_text("protected\n")
+        managed = self.path / "home/codex-home"
+        hook = self.path / "shim-hook"
+        hook.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/mkdir -p \"%s\"; /bin/rm -rf \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
+            % (self.path, managed.parent, managed, outside, managed)
+        )
+        hook.chmod(0o755)
+        result = invoke(self.sandbox, "install", "--harness", "all", "--component", "agents", "--component", "instructions")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("symlinked ancestor", result.stderr)
+        self.assertEqual(canary.read_text(), "protected\n")
+        self.assertFalse((outside / "AGENTS.md").exists())
+
+    def test_codex_ancestor_swap_is_revalidated_before_any_codex_link(self) -> None:
+        outside = self.path / "outside"
+        outside.mkdir()
+        canary = outside / "canary"
+        canary.write_text("protected\n")
+        nested = self.path / "home/nested"
+        managed = nested / "codex"
+        hook = self.path / "shim-hook"
+        hook.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/mkdir -p \"%s\"; /bin/rm -rf \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
+            % (self.path, nested.parent, nested, outside, nested)
+        )
+        hook.chmod(0o755)
+        result = invoke(
+            self.sandbox, "install", "--harness", "all", "--component", "agents", "--component", "instructions",
+            environment_override={"CODEX_HOME": str(managed)},
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("symlinked ancestor", result.stderr)
+        self.assertEqual(canary.read_text(), "protected\n")
+        self.assertFalse((outside / "AGENTS.md").exists())
+        self.assertFalse((outside / "agents").exists())
+        self.assertFalse((managed / "AGENTS.md").exists())
+        self.assertFalse((managed / "agents").exists())
+
     def test_pi_agents_preview_ignores_object_form_old_package(self) -> None:
         home = self.path / "home"
         settings = home / ".pi/agent/settings.json"
