@@ -28,6 +28,18 @@ Reload active harnesses afterward, for example `/reload` in Pi.
 
 `--component` is repeatable; omit it to install every component. Skills-only operations link canonical skill directories directly (without rendering agents or running external harness commands). For example, install shared Pi/Codex skills with `uv run harness-kit install --harness codex --component skills`, or Claude agents and instructions with `uv run harness-kit install --harness claude --component agents --component instructions`.
 
+### Agent installation by harness
+
+The `agents` component uses each harness's supported distribution mechanism:
+
+| Harness | Rendered agents | Installation mechanism |
+| --- | --- | --- |
+| Claude | `.generated/claude/agents/*.md` | Links into `~/.claude/agents/` |
+| Pi | `.generated/pi/agents/*.md` | Registers this checkout as a Pi package with `pi install`; `package.json` exposes the rendered directory through `pi.subagents.agents` |
+| Codex | `.generated/codex/agents/*.toml` | Links into `$CODEX_HOME/agents/` (default `~/.codex/agents/`) |
+
+Pi package agents remain in this checkout. They are discovered through the package entry in `~/.pi/agent/settings.json`, so installing the Pi `agents` component intentionally does **not** copy or link them into `~/.pi/agent/agents/`. That directory remains available for user-local agents and overrides. Reload an active Pi session after installation.
+
 Installation is stateless: it does not record ownership or remove historical state. Existing deployed link destinations are never replaced or removed. Skills are linked individually, allowing them to coexist with other skills; manually clean up links that are no longer desired.
 
 ## Layout
