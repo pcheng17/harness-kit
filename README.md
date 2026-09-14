@@ -20,6 +20,16 @@ uv run harness-kit install
 
 Reload active harnesses afterward, for example `/reload` in Pi.
 
+### Pi subagents
+
+The Pi configuration depends on the [`pi-subagents`](https://github.com/nicobailon/pi-subagents) extension. When Pi agents are selected, installation sets `subagents.disableBuiltins` to `true` in `~/.pi/agent/settings.json`. This disables the extension's bundled agent catalog while keeping harness-kit's package agents, agents from other packages, and user or project agents available.
+
+The narrowest invocation that applies this setting is:
+
+```bash
+uv run harness-kit install --harness pi --component agents
+```
+
 ## Commands
 
 - `uv run harness-kit preview [--harness claude|pi|codex|all] [--component skills|agents|instructions]` prints the desired deployment without changing anything.
