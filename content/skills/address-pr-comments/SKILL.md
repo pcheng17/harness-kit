@@ -74,7 +74,7 @@ Then go through each candidate **one at a time**, in order. For each:
 
 ### c. Ask the user what to do
 
-Use the harness's structured question tool (`ask_user_question` in Pi or `AskUserQuestion` in Claude Code) to get an explicit decision. Do not use a plain-text prompt when a structured question tool is available. Only fall back to a plain prompt in a non-interactive environment or a harness without such a tool.
+Use the harness's structured question tool (`ask_user_question` in Pi or `AskUserQuestion` in Claude Code, for example) to get an explicit decision. Do not use a plain-text prompt when a structured question tool is available. Only fall back to a plain prompt in a non-interactive environment or a harness without such a tool.
 
 Present these options:
 
