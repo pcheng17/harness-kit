@@ -74,12 +74,17 @@ Then go through each candidate **one at a time**, in order. For each:
 
 ### c. Ask the user what to do
 
-Use `AskUserQuestion` (or a plain prompt) to get an explicit decision. The options:
+Use the harness's structured question tool (`ask_user_question` in Pi or `AskUserQuestion` in Claude Code, for example) to get an explicit decision. Do not use a plain-text prompt when a structured question tool is available. Only fall back to a plain prompt in a non-interactive environment or a harness without such a tool.
 
-- **Apply** your suggestion as described, or a **modified** version of it.
-- **Different instructions** — the user tells you how to address it; follow those instead. This may be open-ended.
+Present these options:
+
+- **Apply** — apply your suggestion as described.
 - **Skip** — the user will handle it manually; leave the thread completely untouched (no code change, no reply). Don't re-ask about it later in this same run.
 - **Reply to reviewer** — draft a reply asking for clarification instead of changing code (the user approves the text).
+
+Put your recommended option first and append `(Recommended)` to its label. This may be **Reply to reviewer** rather than **Apply** when the request is ambiguous or contested.
+
+The user provides a modified approach through the tool's automatic custom-answer path. Do not add `Modify approach`, `Other`, `Type something.`, or an equivalent option yourself when the structured tool supplies that path automatically.
 
 ### d. Record the decision
 
@@ -108,7 +113,7 @@ Will skip ({count}):
 - `{path}:{line}`
 ```
 
-Ask the user to confirm before proceeding to Phase B.
+Use the structured question tool to ask the user to confirm before proceeding to Phase B when one is available; otherwise use a plain confirmation prompt.
 
 ## Phase B — Execute
 
