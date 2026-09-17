@@ -1,5 +1,5 @@
 ---
-name: gha
+name: debug-github-actions
 description: Analyze GitHub Actions failures and identify root causes
 argument-hint: <url>
 ---
