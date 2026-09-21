@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import json
 import os
 import shutil
@@ -48,7 +47,6 @@ class Operation:
     action: str
     detail: str = ""
     link: Link | None = None
-    path: Path | None = None
 
 
 def home() -> Path:
@@ -423,51 +421,8 @@ def read_pi_settings(path: Path) -> dict[str, Any]:
     return settings
 
 
-def inspect_pi_settings() -> tuple[Operation, dict[str, Any]]:
-    path = home() / ".pi/agent/settings.json"
-    settings = read_pi_settings(path)
-    if "subagents" not in settings:
-        return Operation("pi settings", "set subagents.disableBuiltins=true", path=path), settings
-    subagents = settings["subagents"]
-    if not isinstance(subagents, dict):
-        return Operation("conflict", "subagents must be an object", path=path), settings
-    if "disableBuiltins" not in subagents:
-        return Operation("pi settings", "set subagents.disableBuiltins=true", path=path), settings
-    if subagents["disableBuiltins"] is True:
-        return Operation("noop", "subagents.disableBuiltins=true", path=path), settings
-    return Operation("conflict", "subagents.disableBuiltins is not true", path=path), settings
-
-
-def write_pi_settings() -> None:
-    path = home() / ".pi/agent/settings.json"
-    validate_managed_ancestors(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    operation, settings = inspect_pi_settings()
-    if operation.action == "noop":
-        return
-    if operation.action == "conflict":
-        raise KitError(f"refusing to overwrite conflicting Pi settings: {path}")
-    original_settings = copy.deepcopy(settings)
-    subagents = settings.setdefault("subagents", {})
-    subagents["disableBuiltins"] = True
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w") as file:
-            file.write(json.dumps(settings, indent=2) + "\n")
-            file.flush()
-            os.fsync(file.fileno())
-        validate_managed_ancestors(path)
-        latest_operation, latest_settings = inspect_pi_settings()
-        if latest_operation.action == "conflict" or latest_settings != original_settings:
-            raise KitError(f"Pi settings changed during installation: {path}")
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
 def install_plan(harness: str, agents: list[Agent], components: frozenset[str]) -> list[Operation]:
-    """The ordered Install plan: generation, Pi bootstrap, settings, then links."""
+    """The ordered Install plan: generation, Pi bootstrap, then links."""
     operations: list[Operation] = []
     if "agents" in components:
         generated_paths = [GENERATED / selected / "agents" for selected in ("claude", "pi", "codex") if harness in ("all", selected)]
@@ -476,7 +431,6 @@ def install_plan(harness: str, agents: list[Agent], components: frozenset[str]) 
             operations.extend((
                 Operation("npm ci", "install npm dependencies"),
                 Operation("pi install", "register Pi package"),
-                inspect_pi_settings()[0],
             ))
     operations.extend(link_operations(harness, agents, components))
     return operations
@@ -488,8 +442,6 @@ def print_plan(operations: list[Operation]) -> None:
         action = f"[{operation.action.upper()}]"
         if operation.link is not None:
             print(f"{action:12} {operation.link.destination} -> {operation.link.target}{suffix}")
-        elif operation.path is not None:
-            print(f"{action:12} {operation.path}{suffix}")
         else:
             print(f"{action:12} {operation.detail}")
 
@@ -539,8 +491,6 @@ def install(harness: str, components: frozenset[str]) -> int:
             run(["npm", "ci"])
         elif operation.action == "pi install":
             run(["pi", "install", str(ROOT)])
-        elif operation.path is not None:
-            write_pi_settings()
         elif operation.action == "create":
             validate_operation_preconditions(operation)
             assert operation.link is not None
@@ -562,14 +512,10 @@ def check(harness: str, components: frozenset[str]) -> int:
     operations = link_operations(harness, agents, components)
     drift = ("agents" in components and not verify_generated(files, harness)) or any(operation.action != "noop" for operation in operations)
     if harness in ("all", "pi") and "agents" in components:
-        settings_operation, settings = inspect_pi_settings()
-        operations.insert(0, settings_operation)
-        if settings_operation.action == "conflict":
-            print_plan(operations)
-            raise KitError("refusing to overwrite conflicting Pi settings")
+        settings = read_pi_settings(home() / ".pi/agent/settings.json")
         packages = settings.get("packages", [])
         installed = isinstance(packages, list) and str(ROOT) in packages
-        drift = drift or not installed or settings_operation.action != "noop"
+        drift = drift or not installed
     if drift:
         print("harness-kit is valid but not converged; run: uv run harness-kit install")
         print_plan(operations)

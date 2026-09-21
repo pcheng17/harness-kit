@@ -357,38 +357,28 @@ class HarnessKitTests(unittest.TestCase):
             pi = invoke(sandbox, "install", "--harness", "pi", "--component", "agents")
             self.assertEqual(pi.returncode, 0, pi.stderr)
             self.assertFalse((sandbox.root / "home/.agents/AGENTS.md").exists())
-            settings = json.loads((sandbox.root / "home/.pi/agent/settings.json").read_text())
-            self.assertIs(settings["subagents"]["disableBuiltins"], True)
+            self.assertFalse((sandbox.root / "home/.pi/agent/settings.json").exists())
             self.assertEqual(len((sandbox.root / "commands").read_text().splitlines()), 2)
 
-    def test_default_pi_install_configures_subagent_settings(self) -> None:
+    def test_default_pi_install_does_not_create_settings(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "pi")
         self.assertEqual(result.returncode, 0, result.stderr)
-        settings = json.loads((self.path / "home/.pi/agent/settings.json").read_text())
-        self.assertIs(settings["subagents"]["disableBuiltins"], True)
+        self.assertFalse((self.path / "home/.pi/agent/settings.json").exists())
 
-    def test_pi_agent_install_preserves_existing_settings(self) -> None:
+    def test_pi_agent_install_leaves_subagent_settings_untouched(self) -> None:
         settings_path = self.path / "home/.pi/agent/settings.json"
         settings_path.parent.mkdir(parents=True)
-        settings_path.write_text(json.dumps({
+        original = json.dumps({
             "theme": "dark",
-            "subagents": {"defaultModel": "provider/model"},
-        }) + "\n")
+            "subagents": {"defaultModel": "provider/model", "disableBuiltins": True},
+        }) + "\n"
+        settings_path.write_text(original)
 
         result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("[PI SETTINGS]", result.stdout)
-        self.assertEqual(json.loads(settings_path.read_text()), {
-            "theme": "dark",
-            "subagents": {
-                "defaultModel": "provider/model",
-                "disableBuiltins": True,
-            },
-        })
-        repeated = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
-        self.assertEqual(repeated.returncode, 0, repeated.stderr)
-        self.assertIn("[NOOP]", repeated.stdout)
+        self.assertNotIn("[PI SETTINGS]", result.stdout)
+        self.assertEqual(settings_path.read_text(), original)
 
     def test_non_agent_pi_install_does_not_write_settings(self) -> None:
         for component in ("skills", "instructions"):
@@ -1013,7 +1003,7 @@ class HarnessKitTests(unittest.TestCase):
 
         preview = invoke(self.sandbox, "preview", "--component", "agents")
         self.assertEqual(preview.returncode, 0, preview.stderr)
-        markers = ("[RENDER]", "[NPM CI]", "[PI INSTALL]", "[PI SETTINGS]", "[CREATE]")
+        markers = ("[RENDER]", "[NPM CI]", "[PI INSTALL]", "[CREATE]")
         positions = [preview.stdout.index(marker) for marker in markers]
         self.assertEqual(positions, sorted(positions))
 
@@ -1047,54 +1037,36 @@ class HarnessKitTests(unittest.TestCase):
         self.assertFalse(stale.exists())
         self.assertFalse(legacy.exists())
 
-    def test_pi_settings_preview_is_read_only_and_check_detects_drift(self) -> None:
+    def test_pi_subagent_settings_are_not_managed(self) -> None:
         settings = self.path / "home/.pi/agent/settings.json"
         settings.parent.mkdir(parents=True)
-        original = json.dumps({"packages": [str(self.project)]}) + "\n"
+        original = json.dumps({"packages": [str(self.project)], "subagents": {"disableBuiltins": False}}) + "\n"
         settings.write_text(original)
 
         preview = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
         self.assertEqual(preview.returncode, 0, preview.stderr)
-        self.assertIn("[PI SETTINGS]", preview.stdout)
+        self.assertNotIn("[PI SETTINGS]", preview.stdout)
         self.assertEqual(settings.read_text(), original)
 
-        self.assertEqual(invoke(self.sandbox, "check", "--harness", "pi", "--component", "agents").returncode, 1)
-        self.assertEqual(invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents").returncode, 0)
+        installed = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        self.assertEqual(settings.read_text(), original)
         checked = invoke(self.sandbox, "check", "--harness", "pi", "--component", "agents")
         self.assertEqual(checked.returncode, 0, checked.stderr)
 
-    def test_pi_settings_conflict_fails_before_external_commands(self) -> None:
-        settings = self.path / "home/.pi/agent/settings.json"
-        settings.parent.mkdir(parents=True)
-        original = json.dumps({"subagents": {"disableBuiltins": False}}) + "\n"
-        settings.write_text(original)
-
-        for command in ("preview", "install", "check"):
-            with self.subTest(command=command):
-                result = invoke(self.sandbox, command, "--harness", "pi", "--component", "agents")
-                self.assertEqual(result.returncode, 2, result.stderr)
-                self.assertIn("[CONFLICT]", result.stdout)
-                self.assertEqual(settings.read_text(), original)
-                self.assertFalse((self.path / "commands").exists())
-
-    def test_pi_settings_rejects_malformed_json_and_symlink(self) -> None:
+    def test_pi_check_rejects_malformed_json_and_symlink(self) -> None:
         settings = self.path / "home/.pi/agent/settings.json"
         settings.parent.mkdir(parents=True)
         settings.write_text("not json\n")
-        malformed = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
+        malformed = invoke(self.sandbox, "check", "--harness", "pi", "--component", "agents")
         self.assertEqual(malformed.returncode, 2)
         self.assertIn("cannot read Pi settings", malformed.stderr)
-
-        settings.write_text(json.dumps({"subagents": None}) + "\n")
-        invalid = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
-        self.assertEqual(invalid.returncode, 2)
-        self.assertIn("[CONFLICT]", invalid.stdout)
 
         target = self.path / "settings-target.json"
         target.write_text("{}\n")
         settings.unlink()
         settings.symlink_to(target)
-        symlink = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
+        symlink = invoke(self.sandbox, "check", "--harness", "pi", "--component", "agents")
         self.assertEqual(symlink.returncode, 2)
         self.assertIn("symlinked Pi settings", symlink.stderr)
         self.assertEqual(target.read_text(), "{}\n")
