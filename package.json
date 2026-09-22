@@ -10,7 +10,6 @@
       "./node_modules/@juicesharp/rpiv-ask-user-question/index.ts",
       "./node_modules/@juicesharp/rpiv-btw/index.ts",
       "./node_modules/@juicesharp/rpiv-todo/index.ts",
-      "./node_modules/pi-blackhole/index.ts",
       "./node_modules/pi-mcp-adapter/index.ts"
     ],
     "skills": ["./node_modules/pi-subagents/skills"],
@@ -30,7 +29,6 @@
     "@juicesharp/rpiv-ask-user-question": "^1.13.0",
     "@juicesharp/rpiv-btw": "^1.13.0",
     "@juicesharp/rpiv-todo": "^1.13.0",
-    "pi-blackhole": "^0.5.7",
     "pi-mcp-adapter": "^2.36.0",
     "pi-subagents": "0.67.0"
   },
