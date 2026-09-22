@@ -30,6 +30,10 @@ The narrowest invocation that installs the Pi package and agents is:
 uv run harness-kit install --harness pi --component agents
 ```
 
+### Pi Blackhole
+
+The Pi package also includes [`pi-blackhole`](https://github.com/k0valik/pi-blackhole). It creates its configuration at `~/.pi/agent/pi-blackhole/pi-blackhole-config.json`; use `/blackhole settings` for optional tuning. Remove standalone `pi-vcc` or `pi-observational-memory` packages before installation because they conflict with pi-blackhole. Reload Pi after installation.
+
 ## Commands
 
 - `uv run harness-kit preview [--harness claude|pi|codex|all] [--component skills|agents|instructions]` prints the desired deployment without changing anything.
