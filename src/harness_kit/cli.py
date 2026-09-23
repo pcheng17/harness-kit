@@ -21,7 +21,7 @@ CAPABILITY_TOOLS = {
     "claude": {"read": "Read", "grep": "Grep", "find": "Glob", "bash": "Bash", "edit": "Edit", "write": "Write"},
     "pi": {"read": "read", "grep": "grep", "find": "find", "bash": "bash", "edit": "edit", "write": "write"},
 }
-HARNESSES = frozenset(("claude", "pi", "codex"))
+HARNESSES = ("claude", "pi", "codex")
 
 
 class KitError(RuntimeError):
@@ -111,7 +111,7 @@ def validate_machine_overrides(overrides: dict[str, Any], names: set[str]) -> No
     for name, override in overrides.items():
         if not isinstance(override, dict):
             raise KitError(f"machine policy agent {name!r} must be a table")
-        unknown_harnesses = sorted(set(override) - HARNESSES)
+        unknown_harnesses = sorted(set(override) - set(HARNESSES))
         if unknown_harnesses:
             raise KitError(f"machine policy agent {name!r}: unknown harness {unknown_harnesses[0]!r}")
         for harness, settings in override.items():
@@ -185,10 +185,10 @@ def validate_catalog(policy: dict[str, Any], agents: list[Agent]) -> None:
         if agent.name not in policy["agents"] or not isinstance(policy["agents"][agent.name], dict):
             raise KitError(f"policy.toml missing defaults for agent {agent.name!r}")
         harnesses = policy["agents"][agent.name]
-        missing = sorted(HARNESSES - set(harnesses))
+        missing = [harness for harness in HARNESSES if harness not in harnesses]
         if missing:
             raise KitError(f"policy.toml missing defaults for {agent.name!r}.{missing[0]}")
-        unknown = sorted(set(harnesses) - HARNESSES)
+        unknown = sorted(set(harnesses) - set(HARNESSES))
         if unknown:
             raise KitError(f"policy.toml agent {agent.name!r}: unknown harness {unknown[0]!r}")
         for harness in HARNESSES:
@@ -273,7 +273,7 @@ def validate_generated_destination(destination: Path) -> None:
 
 
 def materialize(files: dict[Path, str], harness: str) -> None:
-    selected_harnesses = [selected for selected in ("claude", "pi", "codex") if harness in ("all", selected)]
+    selected_harnesses = [selected for selected in HARNESSES if harness in ("all", selected)]
     # Preflight every selected tree before creating any replacement or output.
     # In particular, mkdir/rename must never follow a symlinked .generated.
     destinations = {selected: GENERATED / selected for selected in selected_harnesses}
@@ -461,7 +461,7 @@ def install_plan(harness: str, agents: list[Agent], components: frozenset[str]) 
     """The ordered Install plan: generation, Pi bootstrap, then links."""
     operations: list[Operation] = []
     if "agents" in components:
-        generated_paths = [GENERATED / selected / "agents" for selected in ("claude", "pi", "codex") if harness in ("all", selected)]
+        generated_paths = [GENERATED / selected / "agents" for selected in HARNESSES if harness in ("all", selected)]
         operations.append(Operation("render", f"generate selected agent trees at {', '.join(map(str, generated_paths))}"))
         if harness in ("all", "pi"):
             operations.extend((
@@ -484,7 +484,7 @@ def print_plan(operations: list[Operation]) -> None:
 
 def validate_generated_trees(harness: str) -> None:
     """Reject selected generated trees that could redirect reads or writes."""
-    for selected in ("claude", "pi", "codex"):
+    for selected in HARNESSES:
         if harness in ("all", selected):
             validate_generated_destination(GENERATED / selected / "agents")
 
@@ -493,7 +493,7 @@ def verify_generated(files: dict[Path, str], harness: str) -> bool:
     validate_generated_trees(harness)
     if not all(path.is_file() and not path.is_symlink() and path.read_text() == content for path, content in files.items()):
         return False
-    for selected in ("claude", "pi", "codex"):
+    for selected in HARNESSES:
         if harness in ("all", selected):
             root = GENERATED / selected
             expected = {path for path in files if path.is_relative_to(root)}
@@ -575,7 +575,7 @@ def main(argv: list[str] | None = None) -> int:
     subcommands = parser.add_subparsers(dest="command", required=True, metavar="{preview,install,check}")
     for command in ("preview", "install", "check"):
         item = subcommands.add_parser(command, help=COMMAND_HELP[command], description=COMMAND_HELP[command])
-        item.add_argument("--harness", choices=("all", "claude", "pi", "codex"), default="all", help="limit to this harness (default: all)")
+        item.add_argument("--harness", choices=("all", *HARNESSES), default="all", help="limit to this harness (default: all)")
         item.add_argument("--component", action="append", choices=("skills", "agents", "instructions"), help="deploy only this component (repeatable)")
     args = parser.parse_args(argv)
     try:
