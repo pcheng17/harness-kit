@@ -191,7 +191,7 @@ def validate_catalog(policy: dict[str, Any], agents: list[Agent]) -> None:
         raise KitError("policy.toml must contain only an agents table")
     validate_policy_agents(policy["agents"], [agent.name for agent in agents], ROOT / "policy.toml", complete=True)
     for agent in agents:
-        for harness in ("claude", "pi"):
+        for harness in CAPABILITY_TOOLS:
             for tool in agent.tools:
                 if tool not in CAPABILITY_TOOLS[harness]:
                     raise KitError(f"{agent.name}: unknown tool capability {tool!r} for {harness.title()}")
