@@ -61,7 +61,7 @@ Installation is stateless: it does not record ownership or remove historical sta
 
 Pi-specific agents have intentionally been removed. Generic agents are rendered into `.generated/pi/agents` and exposed through this checkout's Pi package.
 
-## Agent metadata
+## Agent definitions
 
 Each `content/agents/*/agent.toml` declares only `name`, `description`, and tool capabilities. Harness Kit translates those capabilities with fixed adapter mappings; tool mappings are not policy-configurable.
 

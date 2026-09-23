@@ -792,7 +792,7 @@ class HarnessKitTests(unittest.TestCase):
             self.assertEqual(codex["model"], settings["codex"]["model"])
             self.assertEqual(codex["model_reasoning_effort"], settings["codex"]["effort"])
 
-    def test_agent_metadata_contains_only_identity_and_capabilities(self) -> None:
+    def test_agent_definition_contains_only_identity_and_capabilities(self) -> None:
         for path in self.project.glob("content/agents/*/agent.toml"):
             self.assertEqual(set(tomllib.loads(path.read_text())), {"name", "description", "tools"})
 
@@ -829,7 +829,7 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn("missing defaults", result.stderr)
         self.assertIn(str(policy) + ":", result.stderr)
 
-    def test_agent_metadata_rejects_policy_fields(self) -> None:
+    def test_agent_definition_rejects_policy_fields(self) -> None:
         metadata = self.project / "content/agents/scout/agent.toml"
         metadata.write_text(metadata.read_text() + '\n[codex]\nmodel = "override"\n')
         result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents")
