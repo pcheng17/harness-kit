@@ -827,6 +827,7 @@ class HarnessKitTests(unittest.TestCase):
         result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents")
         self.assertEqual(result.returncode, 2)
         self.assertIn("missing defaults", result.stderr)
+        self.assertIn(str(policy) + ":", result.stderr)
 
     def test_agent_metadata_rejects_policy_fields(self) -> None:
         metadata = self.project / "content/agents/scout/agent.toml"
@@ -1287,6 +1288,7 @@ class HarnessKitTests(unittest.TestCase):
         result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 2)
         self.assertIn("unknown agent 'missing'", result.stderr)
+        self.assertIn(str(policy) + ":", result.stderr)
 
     def test_machine_policy_rejects_unknown_agent_setting(self) -> None:
         policy = self.path / "xdg/config/harness-kit/policy.toml"

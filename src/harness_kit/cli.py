@@ -92,7 +92,7 @@ def load_machine_policy() -> dict[str, Any]:
         raise KitError(f"{path}: unknown top-level setting {unknown[0]!r}")
     agents = policy.get("agents", {})
     if not isinstance(agents, dict):
-        raise KitError("machine policy agents must be a table")
+        raise KitError(f"{path}: agents must be a table")
     return agents
 
 
@@ -102,24 +102,38 @@ def validate_policy_value(value: Any, location: str) -> None:
         raise KitError(f"{location} must be a non-empty single-line string")
 
 
-def validate_machine_overrides(overrides: dict[str, Any], names: set[str]) -> None:
-    unknown_agents = sorted(set(overrides) - names)
+def validate_policy_agents(
+    settings_by_agent: dict[str, Any], names: list[str], location: Path, *, complete: bool,
+) -> None:
+    unknown_agents = sorted(set(settings_by_agent) - set(names))
     if unknown_agents:
-        raise KitError(f"machine policy references unknown agent {unknown_agents[0]!r}")
-    for name, override in overrides.items():
-        if not isinstance(override, dict):
-            raise KitError(f"machine policy agent {name!r} must be a table")
-        unknown_harnesses = sorted(set(override) - set(HARNESSES))
+        raise KitError(f"{location}: unknown agent {unknown_agents[0]!r}")
+    selected = names if complete else list(settings_by_agent)
+    for name in selected:
+        harnesses = settings_by_agent.get(name)
+        if complete and not isinstance(harnesses, dict):
+            raise KitError(f"{location}: missing defaults for agent {name!r}")
+        if not isinstance(harnesses, dict):
+            raise KitError(f"{location}: agent {name!r} must be a table")
+        if complete:
+            missing = [harness for harness in HARNESSES if harness not in harnesses]
+            if missing:
+                raise KitError(f"{location}: missing defaults for {name!r}.{missing[0]}")
+        unknown_harnesses = sorted(set(harnesses) - set(HARNESSES))
         if unknown_harnesses:
-            raise KitError(f"machine policy agent {name!r}: unknown harness {unknown_harnesses[0]!r}")
-        for harness, settings in override.items():
+            raise KitError(f"{location}: agent {name!r}: unknown harness {unknown_harnesses[0]!r}")
+        selected_harnesses = HARNESSES if complete else harnesses
+        for harness in selected_harnesses:
+            settings = harnesses[harness]
             if not isinstance(settings, dict):
-                raise KitError(f"machine policy agent {name!r}.{harness} must be a table")
-            unknown = sorted(set(settings) - {"model", "effort"})
-            if unknown:
-                raise KitError(f"machine policy agent {name!r}.{harness}: unknown setting {unknown[0]!r}")
+                raise KitError(f"{location}: {name!r}.{harness} must be a table")
+            if complete and set(settings) != {"model", "effort"}:
+                raise KitError(f"{location}: {name!r}.{harness} must contain only model and effort")
+            unknown_fields = sorted(set(settings) - {"model", "effort"})
+            if unknown_fields:
+                raise KitError(f"{location}: {name!r}.{harness}: unknown setting {unknown_fields[0]!r}")
             for field, value in settings.items():
-                validate_policy_value(value, f"machine policy agent {name!r}.{harness} {field}")
+                validate_policy_value(value, f"{location}: {name!r}.{harness} {field}")
 
 
 def merge_machine_policy(policy: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
@@ -167,7 +181,7 @@ def load_catalog(harness: str, components: frozenset[str]) -> tuple[dict[str, An
         agents.append(Agent(name, data["description"], tuple(tools), prompt_path.read_text()))
     if not agents:
         raise KitError("no agents found")
-    validate_machine_overrides(agent_overrides, names)
+    validate_policy_agents(agent_overrides, [agent.name for agent in agents], machine_policy_path(), complete=False)
     validate_catalog(policy, agents)
     return merge_machine_policy(policy, agent_overrides), agents
 
@@ -175,28 +189,8 @@ def load_catalog(harness: str, components: frozenset[str]) -> tuple[dict[str, An
 def validate_catalog(policy: dict[str, Any], agents: list[Agent]) -> None:
     if set(policy) != {"agents"} or not isinstance(policy["agents"], dict):
         raise KitError("policy.toml must contain only an agents table")
-    names = {agent.name for agent in agents}
-    unknown_agents = sorted(set(policy["agents"]) - names)
-    if unknown_agents:
-        raise KitError(f"policy.toml references unknown agent {unknown_agents[0]!r}")
+    validate_policy_agents(policy["agents"], [agent.name for agent in agents], ROOT / "policy.toml", complete=True)
     for agent in agents:
-        if agent.name not in policy["agents"] or not isinstance(policy["agents"][agent.name], dict):
-            raise KitError(f"policy.toml missing defaults for agent {agent.name!r}")
-        harnesses = policy["agents"][agent.name]
-        missing = [harness for harness in HARNESSES if harness not in harnesses]
-        if missing:
-            raise KitError(f"policy.toml missing defaults for {agent.name!r}.{missing[0]}")
-        unknown = sorted(set(harnesses) - set(HARNESSES))
-        if unknown:
-            raise KitError(f"policy.toml agent {agent.name!r}: unknown harness {unknown[0]!r}")
-        for harness in HARNESSES:
-            settings = harnesses[harness]
-            if not isinstance(settings, dict):
-                raise KitError(f"policy.toml {agent.name!r}.{harness} must be a table")
-            if set(settings) != {"model", "effort"}:
-                raise KitError(f"policy.toml {agent.name!r}.{harness} must contain only model and effort")
-            for field in ("model", "effort"):
-                validate_policy_value(settings[field], f"policy.toml {agent.name!r}.{harness} {field}")
         for harness in ("claude", "pi"):
             for tool in agent.tools:
                 if tool not in CAPABILITY_TOOLS[harness]:
