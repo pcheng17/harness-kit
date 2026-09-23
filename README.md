@@ -75,6 +75,10 @@ An optional `$XDG_CONFIG_HOME/harness-kit/policy.toml` (falling back to `~/.conf
 [agents.debugger.pi]
 model = "openai-codex/gpt-5.6-sol"
 effort = "high"
+
+[agents.debugger.codex]
+model = "gpt-5.6-sol"
+effort = "high"
 ```
 
 Machine values take precedence over checked-in defaults; omitted values retain the checked-in value. Model tiers, provider routing, and configurable tool mappings are not supported.
