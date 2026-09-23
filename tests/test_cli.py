@@ -1320,6 +1320,14 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("model must be a non-empty single-line string", result.stderr)
 
+    def test_dangling_machine_policy_symlink_is_an_error(self) -> None:
+        policy = self.path / "xdg/config/harness-kit/policy.toml"
+        policy.parent.mkdir(parents=True)
+        policy.symlink_to(self.path / "missing-policy.toml")
+        result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(f"cannot read {policy}", result.stderr)
+
     def test_install_does_not_create_machine_policy(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)

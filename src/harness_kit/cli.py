@@ -85,7 +85,7 @@ def machine_policy_path() -> Path:
 
 def load_machine_policy() -> dict[str, Any]:
     path = machine_policy_path()
-    if not path.exists():
+    if not path.exists() and not path.is_symlink():
         return {}
     policy = load_toml(path)
     unknown = sorted(set(policy) - {"agents"})
