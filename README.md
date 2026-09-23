@@ -18,7 +18,7 @@ git pull --ff-only
 uv run harness-kit install
 ```
 
-Reload active harnesses afterward, for example `/reload` in Pi.
+The repository policy provides complete defaults. To customize an individual agent on one machine, create `$XDG_CONFIG_HOME/harness-kit/policy.toml` (or `~/.config/harness-kit/policy.toml` when `XDG_CONFIG_HOME` is unset) manually. Reload active harnesses afterward, for example `/reload` in Pi.
 
 ### Pi subagents
 
@@ -61,6 +61,24 @@ Installation is stateless: it does not record ownership or remove historical sta
 
 Pi-specific agents have intentionally been removed. Generic agents are rendered into `.generated/pi/agents` and exposed through this checkout's Pi package.
 
-## Agent metadata
+## Agent definitions
 
-Each `content/agents/*/agent.toml` declares `name`, `description`, `model_tier`, `reasoning_effort`, and `tools`. `model_tier` resolves through each harness's policy mapping. The shared `reasoning_effort` is rendered as Claude `effort`, Pi `thinking`, and Codex `model_reasoning_effort`; `[claude].effort`, `[pi].thinking`, and `[codex].model_reasoning_effort` can override it for one harness. Codex model IDs resolve through `[models.codex]` and are rendered as `model` in its generated TOML; `[codex].model` can override that tier-mapped model for one agent.
+Each `content/agents/*/agent.toml` declares only `name`, `description`, and tool capabilities. Harness Kit translates those capabilities with fixed adapter mappings; tool mappings are not policy-configurable.
+
+## Policy
+
+Checked-in `policy.toml` supplies a concrete `model` and `effort` for every agent and each of Claude, Pi, and Codex. Missing defaults are invalid. The renderer translates `effort` to Claude `effort`, Pi `thinking`, and Codex `model_reasoning_effort`.
+
+An optional `$XDG_CONFIG_HOME/harness-kit/policy.toml` (falling back to `~/.config/harness-kit/policy.toml`) is a partial override over those defaults. It may contain only known agents, known harnesses, and non-empty single-line string `model` and `effort` values:
+
+```toml
+[agents.debugger.pi]
+model = "openai-codex/gpt-5.6-sol"
+effort = "high"
+
+[agents.debugger.codex]
+model = "gpt-5.6-sol"
+effort = "high"
+```
+
+Machine values take precedence over checked-in defaults; omitted values retain the checked-in value. Model tiers, provider routing, and configurable tool mappings are not supported.
