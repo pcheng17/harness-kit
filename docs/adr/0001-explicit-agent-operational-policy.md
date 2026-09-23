@@ -1,3 +1,3 @@
-# Use explicit per-harness agent policy
+# Use explicit per-harness operational policy
 
 Agent definitions own identity, instructions, and allowed tool capabilities; renderer code owns fixed capability translation. Checked-in `policy.toml` supplies a concrete model and reasoning effort for every agent and supported harness, using uniform `model` and `effort` keys; missing defaults are errors. An optional machine policy at the existing XDG path may override only those values for specific agents and harnesses. We rejected model tiers and shared provider routing because their indirection obscures the actual model choice, and rejected machine-configurable tool mappings because they could change agent authority. This makes defaults more repetitive but keeps execution choices explicit and machine overrides narrow.
