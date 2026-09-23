@@ -75,11 +75,9 @@ def load_toml(path: Path) -> dict[str, Any]:
 
 
 def machine_policy_path() -> Path:
-    if configured := os.environ.get("XDG_CONFIG_HOME"):
-        root = Path(configured).expanduser()
-        if not root.is_absolute():
-            raise KitError("XDG_CONFIG_HOME must be absolute")
-    else:
+    configured = os.environ.get("XDG_CONFIG_HOME")
+    root = Path(configured) if configured else None
+    if root is None or not root.is_absolute():
         root = home() / ".config"
     return root / "harness-kit/policy.toml"
 

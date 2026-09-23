@@ -111,6 +111,9 @@ def subprocess_environment(sandbox: Sandbox, environment_override: dict[str, str
         environment["HARNESS_SHIM_HOOK"] = str(hook)
     for key, value in (environment_override or {}).items():
         if key in _MUTATION_ENVIRONMENT_PATHS:
+            if key == "XDG_CONFIG_HOME" and value and not Path(value).is_absolute():
+                environment[key] = value  # The CLI ignores invalid relative XDG paths.
+                continue
             if value is None:
                 if key == "CODEX_HOME":
                     environment.pop(key, None)
@@ -792,6 +795,16 @@ class HarnessKitTests(unittest.TestCase):
     def test_agent_metadata_contains_only_identity_and_capabilities(self) -> None:
         for path in self.project.glob("content/agents/*/agent.toml"):
             self.assertEqual(set(tomllib.loads(path.read_text())), {"name", "description", "tools"})
+
+    def test_relative_xdg_config_home_uses_home_fallback(self) -> None:
+        policy = self.path / "home/.config/harness-kit/policy.toml"
+        policy.parent.mkdir(parents=True)
+        policy.write_text('[agents.scout.pi]\nmodel = "fallback/pi"\n')
+        result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents",
+                        environment_override={"XDG_CONFIG_HOME": "relative/config"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = (self.project / ".generated/pi/agents/scout.md").read_text()
+        self.assertIn('model: "fallback/pi"', rendered)
 
     def test_harness_overrides_take_precedence(self) -> None:
         policy = self.path / "xdg/config/harness-kit/policy.toml"
