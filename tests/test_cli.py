@@ -1253,6 +1253,72 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn("pi install", commands)
         self.assertNotIn("pi remove", commands)
 
+    def test_machine_policy_overrides_agent_and_model_settings(self) -> None:
+        policy = self.path / "xdg/config/harness-kit/policy.toml"
+        policy.parent.mkdir(parents=True)
+        policy.write_text(
+            "[models.pi.anthropic]\n"
+            'strong = "anthropic/machine-strong"\n'
+            "\n"
+            "[agents.builder]\n"
+            'model_tier = "strong"\n'
+            'reasoning_effort = "high"\n'
+            "\n"
+            "[agents.builder.pi]\n"
+            'provider = "anthropic"\n'
+        )
+
+        result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = (self.project / ".generated/pi/agents/builder.md").read_text()
+        self.assertIn("model: anthropic/machine-strong", rendered)
+        self.assertIn("thinking: high", rendered)
+
+    def test_machine_policy_rejects_unknown_agent(self) -> None:
+        policy = self.path / "xdg/config/harness-kit/policy.toml"
+        policy.parent.mkdir(parents=True)
+        policy.write_text("[agents.missing]\nmodel_tier = \"strong\"\n")
+
+        result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unknown agent 'missing'", result.stderr)
+
+    def test_machine_policy_rejects_unknown_agent_setting(self) -> None:
+        policy = self.path / "xdg/config/harness-kit/policy.toml"
+        policy.parent.mkdir(parents=True)
+        policy.write_text("[agents.builder]\nunknown = \"value\"\n")
+
+        result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unknown setting 'unknown'", result.stderr)
+
+    def test_machine_policy_rejects_incompatible_override_type(self) -> None:
+        policy = self.path / "xdg/config/harness-kit/policy.toml"
+        policy.parent.mkdir(parents=True)
+        policy.write_text("[models.pi.codex]\nstandard = 42\n")
+
+        result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("incompatible base and machine-policy types", result.stderr)
+
+    def test_install_does_not_create_machine_policy(self) -> None:
+        result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.path / "xdg/config/harness-kit/policy.toml").exists())
+
+    def test_configure_creates_optional_machine_policy_without_overwriting(self) -> None:
+        configured = invoke(self.sandbox, "configure")
+        policy = self.path / "xdg/config/harness-kit/policy.toml"
+        self.assertEqual(configured.returncode, 0, configured.stderr)
+        self.assertTrue(policy.is_file())
+        self.assertIn("machine-specific overrides", policy.read_text())
+        original = policy.read_text()
+
+        repeated = invoke(self.sandbox, "configure")
+        self.assertEqual(repeated.returncode, 2)
+        self.assertIn("already exists", repeated.stderr)
+        self.assertEqual(policy.read_text(), original)
+
 
 if __name__ == "__main__":
     unittest.main()

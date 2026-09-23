@@ -17,6 +17,20 @@ ROOT = Path(__file__).resolve().parents[2]
 GENERATED = ROOT / ".generated"
 COMMON_INSTRUCTIONS = ROOT / "content/instructions/AGENTS.md"
 COMPONENTS = frozenset(("skills", "agents", "instructions"))
+MACHINE_POLICY_TEMPLATE = """# Optional machine-specific overrides for harness-kit.
+# Repository defaults remain active for every value omitted here.
+#
+# Example:
+# [models.pi.anthropic]
+# strong = "anthropic/claude-opus-5"
+#
+# [agents.debugger]
+# model_tier = "strong"
+# reasoning_effort = "high"
+#
+# [agents.debugger.pi]
+# provider = "anthropic"
+"""
 
 
 class KitError(RuntimeError):
@@ -74,17 +88,88 @@ def load_toml(path: Path) -> dict[str, Any]:
         raise KitError(f"cannot read {path}: {error}") from error
 
 
+def machine_policy_path() -> Path:
+    if configured := os.environ.get("XDG_CONFIG_HOME"):
+        root = Path(configured).expanduser()
+        if not root.is_absolute():
+            raise KitError("XDG_CONFIG_HOME must be absolute")
+    else:
+        root = home() / ".config"
+    return root / "harness-kit/policy.toml"
+
+
+def merge_tables(base: dict[str, Any], override: dict[str, Any], path: str = "policy") -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        location = f"{path}.{key}"
+        if key not in merged:
+            merged[key] = value
+            continue
+        existing = merged[key]
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = merge_tables(existing, value, location)
+        elif isinstance(existing, dict) or isinstance(value, dict) or type(existing) is not type(value):
+            raise KitError(f"{location} has incompatible base and machine-policy types")
+        else:
+            merged[key] = value
+    return merged
+
+
+def load_policy() -> dict[str, Any]:
+    policy = load_toml(ROOT / "policy.toml")
+    override_path = machine_policy_path()
+    if not override_path.exists():
+        return policy
+    override = load_toml(override_path)
+    unknown = sorted(set(override) - {"models", "tools", "agents"})
+    if unknown:
+        raise KitError(f"{override_path}: unknown top-level setting {unknown[0]!r}")
+    return merge_tables(policy, override)
+
+
+def validate_agent_override(name: str, override: Any) -> None:
+    if not isinstance(override, dict):
+        raise KitError(f"machine policy agent {name!r} must be a table")
+    allowed = {"model_tier", "reasoning_effort", "claude", "pi", "codex"}
+    unknown = sorted(set(override) - allowed)
+    if unknown:
+        raise KitError(f"machine policy agent {name!r}: unknown setting {unknown[0]!r}")
+    harness_fields = {
+        "claude": {"effort", "color"},
+        "pi": {"provider", "thinking", "isolated"},
+        "codex": {"model", "model_reasoning_effort"},
+    }
+    for harness, fields in harness_fields.items():
+        if harness not in override:
+            continue
+        settings = override[harness]
+        if not isinstance(settings, dict):
+            raise KitError(f"machine policy agent {name!r}.{harness} must be a table")
+        unknown_fields = sorted(set(settings) - fields)
+        if unknown_fields:
+            raise KitError(f"machine policy agent {name!r}.{harness}: unknown setting {unknown_fields[0]!r}")
+
+
 def load_catalog(harness: str, components: frozenset[str]) -> tuple[dict[str, Any], list[Agent]]:
     if "instructions" in components and not COMMON_INSTRUCTIONS.is_file():
         raise KitError(f"missing common instructions: {COMMON_INSTRUCTIONS}")
     if "agents" not in components:
         return {}, []
 
-    policy = load_toml(ROOT / "policy.toml")
+    policy = load_policy()
+    agent_overrides = policy.get("agents", {})
+    if not isinstance(agent_overrides, dict):
+        raise KitError("machine policy agents must be a table")
+    for name, override in agent_overrides.items():
+        validate_agent_override(name, override)
+
     agents: list[Agent] = []
     names: set[str] = set()
     for metadata_path in sorted((ROOT / "content/agents").glob("*/agent.toml")):
         data = load_toml(metadata_path)
+        authored_name = data.get("name")
+        if isinstance(authored_name, str) and authored_name in agent_overrides:
+            data = merge_tables(data, agent_overrides[authored_name], f"agents.{authored_name}")
         prompt_path = metadata_path.with_name("prompt.md")
         if not prompt_path.is_file():
             raise KitError(f"missing prompt: {prompt_path}")
@@ -108,6 +193,9 @@ def load_catalog(harness: str, components: frozenset[str]) -> tuple[dict[str, An
         agents.append(Agent(name, data["description"], tier, reasoning_effort, tuple(tools), prompt_path.read_text(), data.get("claude", {}), data.get("pi", {}), data.get("codex", {})))
     if not agents:
         raise KitError("no agents found")
+    unknown_agents = sorted(set(agent_overrides) - names)
+    if unknown_agents:
+        raise KitError(f"machine policy references unknown agent {unknown_agents[0]!r}")
     validate_catalog(policy, agents, harness)
     return policy, agents
 
@@ -524,10 +612,25 @@ def check(harness: str, components: frozenset[str]) -> int:
     return 0
 
 
+def configure() -> int:
+    destination = machine_policy_path()
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("x") as file:
+            file.write(MACHINE_POLICY_TEMPLATE)
+    except FileExistsError as error:
+        raise KitError(f"machine policy already exists: {destination}") from error
+    except OSError as error:
+        raise KitError(f"cannot create {destination}: {error}") from error
+    print(f"Created optional machine policy: {destination}")
+    return 0
+
+
 COMMAND_HELP = {
     "preview": "show what install would change, without touching the filesystem",
     "install": "deploy content into the harness(es)",
     "check": "exit non-zero if the harness(es) are not converged with content",
+    "configure": "create an optional machine-specific policy file",
 }
 
 
@@ -536,14 +639,17 @@ def main(argv: list[str] | None = None) -> int:
         prog="harness-kit",
         description="Deploy shared agent, skill, and instruction content into supported harnesses.",
     )
-    subcommands = parser.add_subparsers(dest="command", required=True, metavar="{preview,install,check}")
+    subcommands = parser.add_subparsers(dest="command", required=True, metavar="{preview,install,check,configure}")
     for command in ("preview", "install", "check"):
         item = subcommands.add_parser(command, help=COMMAND_HELP[command], description=COMMAND_HELP[command])
         item.add_argument("--harness", choices=("all", "claude", "pi", "codex"), default="all", help="limit to this harness (default: all)")
         item.add_argument("--component", action="append", choices=("skills", "agents", "instructions"), help="deploy only this component (repeatable)")
+    subcommands.add_parser("configure", help=COMMAND_HELP["configure"], description=COMMAND_HELP["configure"])
     args = parser.parse_args(argv)
-    components = frozenset(args.component) if args.component else COMPONENTS
     try:
+        if args.command == "configure":
+            return configure()
+        components = frozenset(args.component) if args.component else COMPONENTS
         if args.command == "preview":
             policy, agents = load_catalog(args.harness, components)
             # Render validation is intentionally performed without writing output.

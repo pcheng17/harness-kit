@@ -18,6 +18,14 @@ git pull --ff-only
 uv run harness-kit install
 ```
 
+The repository policy provides complete defaults. To customize model mappings or individual agents on one machine, create an optional machine policy:
+
+```bash
+uv run harness-kit configure
+```
+
+This creates `$XDG_CONFIG_HOME/harness-kit/policy.toml` (or `~/.config/harness-kit/policy.toml` when `XDG_CONFIG_HOME` is unset) and never overwrites an existing file.
+
 Reload active harnesses afterward, for example `/reload` in Pi.
 
 ### Pi subagents
@@ -35,6 +43,7 @@ uv run harness-kit install --harness pi --component agents
 - `uv run harness-kit preview [--harness claude|pi|codex|all] [--component skills|agents|instructions]` prints the desired deployment without changing anything.
 - `uv run harness-kit install [--harness claude|pi|codex|all] [--component skills|agents|instructions]` renders selected agents, installs Pi dependencies and package registration only when Pi agents are selected, and handles each selected destination as create, noop (already targeting the intended source), or conflict. Conflicts are never replaced; old or non-selected links must be removed manually.
 - `uv run harness-kit check [--harness claude|pi|codex|all] [--component skills|agents|instructions]` validates selected content and reports drift without mutating anything.
+- `uv run harness-kit configure` creates an optional machine-specific policy template and refuses to replace an existing one.
 
 `--component` is repeatable; omit it to install every component. Skills-only operations link canonical skill directories directly (without rendering agents or running external harness commands). For example, install shared Pi/Codex skills with `uv run harness-kit install --harness codex --component skills`, or Claude agents and instructions with `uv run harness-kit install --harness claude --component agents --component instructions`.
 
@@ -64,3 +73,30 @@ Pi-specific agents have intentionally been removed. Generic agents are rendered 
 ## Agent metadata
 
 Each `content/agents/*/agent.toml` declares `name`, `description`, `model_tier`, `reasoning_effort`, and `tools`. `model_tier` resolves through each harness's policy mapping. The shared `reasoning_effort` is rendered as Claude `effort`, Pi `thinking`, and Codex `model_reasoning_effort`; `[claude].effort`, `[pi].thinking`, and `[codex].model_reasoning_effort` can override it for one harness. Codex model IDs resolve through `[models.codex]` and are rendered as `model` in its generated TOML; `[codex].model` can override that tier-mapped model for one agent.
+
+## Machine policy
+
+The checked-in `policy.toml` and agent metadata are complete defaults. If present, `$XDG_CONFIG_HOME/harness-kit/policy.toml` (falling back to `~/.config/harness-kit/policy.toml`) is deep-merged over the repository policy. A machine policy is a partial TOML document: omitted values continue to inherit repository defaults.
+
+Concrete model mappings can vary by machine:
+
+```toml
+[models.pi.anthropic]
+strong = "anthropic/claude-opus-5"
+```
+
+The optional `[agents.<name>]` tables override operational settings for one agent. Harness-specific subtables support the same fields as the corresponding metadata table:
+
+```toml
+[agents.debugger]
+model_tier = "strong"
+reasoning_effort = "high"
+
+[agents.debugger.pi]
+provider = "anthropic"
+
+[agents.debugger.codex]
+model = "gpt-5.6-sol"
+```
+
+In this example, Pi routes `debugger` through the machine's `anthropic` model mapping while Codex uses the exact model override. Unknown agents, unknown agent settings, and incompatible base/override value types are rejected. The machine policy may also override existing `[models]` and `[tools]` values or add a Pi provider mapping.
