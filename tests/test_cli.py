@@ -1253,7 +1253,7 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn("pi install", commands)
         self.assertNotIn("pi remove", commands)
 
-    def test_machine_policy_overrides_agent_and_model_settings(self) -> None:
+    def test_machine_policy_overrides_model_and_effort(self) -> None:
         self.write_machine_policy('[agents.builder.pi]\nmodel = "machine/pi"\neffort = "high"\n')
         result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)
