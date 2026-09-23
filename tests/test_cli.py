@@ -806,11 +806,11 @@ class HarnessKitTests(unittest.TestCase):
     def test_checked_in_policy_requires_complete_defaults(self) -> None:
         policy = self.project / "policy.toml"
         original = policy.read_text()
-        policy.write_text(original.replace('model = "gpt-5.6-terra"', 'model = 42', 1))
+        policy.write_text(original.replace('codex.model = "gpt-5.6-terra"', 'codex.model = 42', 1))
         result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents")
         self.assertEqual(result.returncode, 2)
         self.assertIn("model must be a non-empty single-line string", result.stderr)
-        policy.write_text(original.replace('[agents.scout.codex]\nmodel = "gpt-5.6-terra"\neffort = "medium"\n', ''))
+        policy.write_text(original.replace('codex.model = "gpt-5.6-terra"\ncodex.effort = "medium"\n', '', 1))
         result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents")
         self.assertEqual(result.returncode, 2)
         self.assertIn("missing defaults", result.stderr)

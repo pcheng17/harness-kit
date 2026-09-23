@@ -1,59 +1,39 @@
-[agents.builder.claude]
-model = "sonnet"
-effort = "medium"
+[agents.builder]
+claude.model = "sonnet"
+claude.effort = "medium"
+pi.model = "openai-codex/gpt-5.6-terra"
+pi.effort = "medium"
+codex.model = "gpt-5.6-terra"
+codex.effort = "medium"
 
-[agents.builder.pi]
-model = "openai-codex/gpt-5.6-terra"
-effort = "medium"
+[agents.debugger]
+claude.model = "opus"
+claude.effort = "medium"
+pi.model = "openai-codex/gpt-5.6-sol"
+pi.effort = "medium"
+codex.model = "gpt-5.6-sol"
+codex.effort = "medium"
 
-[agents.builder.codex]
-model = "gpt-5.6-terra"
-effort = "medium"
+[agents.refuter]
+claude.model = "opus"
+claude.effort = "medium"
+pi.model = "openai-codex/gpt-5.6-sol"
+pi.effort = "medium"
+codex.model = "gpt-5.6-sol"
+codex.effort = "medium"
 
-[agents.debugger.claude]
-model = "opus"
-effort = "medium"
+[agents.researcher]
+claude.model = "sonnet"
+claude.effort = "medium"
+pi.model = "openai-codex/gpt-5.6-terra"
+pi.effort = "medium"
+codex.model = "gpt-5.6-terra"
+codex.effort = "medium"
 
-[agents.debugger.pi]
-model = "openai-codex/gpt-5.6-sol"
-effort = "medium"
-
-[agents.debugger.codex]
-model = "gpt-5.6-sol"
-effort = "medium"
-
-[agents.refuter.claude]
-model = "opus"
-effort = "medium"
-
-[agents.refuter.pi]
-model = "openai-codex/gpt-5.6-sol"
-effort = "medium"
-
-[agents.refuter.codex]
-model = "gpt-5.6-sol"
-effort = "medium"
-
-[agents.researcher.claude]
-model = "sonnet"
-effort = "medium"
-
-[agents.researcher.pi]
-model = "openai-codex/gpt-5.6-terra"
-effort = "medium"
-
-[agents.researcher.codex]
-model = "gpt-5.6-terra"
-effort = "medium"
-
-[agents.scout.claude]
-model = "sonnet"
-effort = "medium"
-
-[agents.scout.pi]
-model = "openai-codex/gpt-5.6-terra"
-effort = "medium"
-
-[agents.scout.codex]
-model = "gpt-5.6-terra"
-effort = "medium"
+[agents.scout]
+claude.model = "sonnet"
+claude.effort = "medium"
+pi.model = "openai-codex/gpt-5.6-terra"
+pi.effort = "medium"
+codex.model = "gpt-5.6-terra"
+codex.effort = "medium"
