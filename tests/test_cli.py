@@ -148,6 +148,12 @@ class HarnessKitTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def write_machine_policy(self, text: str) -> Path:
+        policy = self.path / "xdg/config/harness-kit/policy.toml"
+        policy.parent.mkdir(parents=True, exist_ok=True)
+        policy.write_text(text)
+        return policy
+
     def test_fresh_install_creates_links_without_state(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "instructions")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -806,16 +812,6 @@ class HarnessKitTests(unittest.TestCase):
         rendered = (self.project / ".generated/pi/agents/scout.md").read_text()
         self.assertIn('model: "fallback/pi"', rendered)
 
-    def test_harness_overrides_take_precedence(self) -> None:
-        policy = self.path / "xdg/config/harness-kit/policy.toml"
-        policy.parent.mkdir(parents=True)
-        policy.write_text('[agents.scout.pi]\nmodel = "machine/pi"\neffort = "high"\n')
-        result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        rendered = (self.project / ".generated/pi/agents/scout.md").read_text()
-        self.assertIn('model: "machine/pi"\n', rendered)
-        self.assertIn('thinking: "high"\n', rendered)
-
     def test_checked_in_policy_requires_complete_defaults(self) -> None:
         policy = self.project / "policy.toml"
         original = policy.read_text()
@@ -1258,9 +1254,7 @@ class HarnessKitTests(unittest.TestCase):
         self.assertNotIn("pi remove", commands)
 
     def test_machine_policy_overrides_agent_and_model_settings(self) -> None:
-        policy = self.path / "xdg/config/harness-kit/policy.toml"
-        policy.parent.mkdir(parents=True)
-        policy.write_text('[agents.builder.pi]\nmodel = "machine/pi"\neffort = "high"\n')
+        self.write_machine_policy('[agents.builder.pi]\nmodel = "machine/pi"\neffort = "high"\n')
         result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)
         rendered = (self.project / ".generated/pi/agents/builder.md").read_text()
@@ -1268,9 +1262,7 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn('thinking: "high"', rendered)
 
     def test_machine_policy_partial_override_preserves_other_defaults(self) -> None:
-        policy = self.path / "xdg/config/harness-kit/policy.toml"
-        policy.parent.mkdir(parents=True)
-        policy.write_text('[agents.builder.pi]\neffort = "high"\n')
+        self.write_machine_policy('[agents.builder.pi]\neffort = "high"\n')
         result = invoke(self.sandbox, "install", "--harness", "all", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)
         pi = (self.project / ".generated/pi/agents/builder.md").read_text()
@@ -1281,9 +1273,7 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn('effort: "medium"\n', claude)
 
     def test_machine_policy_rejects_unknown_agent(self) -> None:
-        policy = self.path / "xdg/config/harness-kit/policy.toml"
-        policy.parent.mkdir(parents=True)
-        policy.write_text('[agents.missing.pi]\nmodel = "unused"\n')
+        policy = self.write_machine_policy('[agents.missing.pi]\nmodel = "unused"\n')
 
         result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 2)
@@ -1291,33 +1281,25 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn(str(policy) + ":", result.stderr)
 
     def test_machine_policy_rejects_unknown_agent_setting(self) -> None:
-        policy = self.path / "xdg/config/harness-kit/policy.toml"
-        policy.parent.mkdir(parents=True)
-        policy.write_text('[agents.builder.pi]\nunknown = "value"\n')
+        self.write_machine_policy('[agents.builder.pi]\nunknown = "value"\n')
         result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 2)
         self.assertIn("unknown setting 'unknown'", result.stderr)
 
     def test_machine_policy_rejects_incompatible_override_type(self) -> None:
-        policy = self.path / "xdg/config/harness-kit/policy.toml"
-        policy.parent.mkdir(parents=True)
-        policy.write_text('[agents.builder.pi]\nmodel = 42\n')
+        self.write_machine_policy('[agents.builder.pi]\nmodel = 42\n')
         result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 2)
         self.assertIn("model must be a non-empty single-line string", result.stderr)
 
     def test_machine_policy_rejects_tool_mapping_overrides(self) -> None:
-        policy = self.path / "xdg/config/harness-kit/policy.toml"
-        policy.parent.mkdir(parents=True)
-        policy.write_text('[tools.pi]\nread = "bash"\n')
+        self.write_machine_policy('[tools.pi]\nread = "bash"\n')
         result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 2)
         self.assertIn("unknown top-level setting 'tools'", result.stderr)
 
     def test_machine_policy_quotes_yaml_significant_values(self) -> None:
-        policy = self.path / "xdg/config/harness-kit/policy.toml"
-        policy.parent.mkdir(parents=True)
-        policy.write_text('[agents.scout.pi]\nmodel = "*undefined_alias"\neffort = "true"\n')
+        self.write_machine_policy('[agents.scout.pi]\nmodel = "*undefined_alias"\neffort = "true"\n')
         result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)
         rendered = (self.project / ".generated/pi/agents/scout.md").read_text()
@@ -1333,9 +1315,7 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn('description: "Reads: files # not a YAML comment"\n', rendered)
 
     def test_machine_policy_rejects_multiline_model_injection(self) -> None:
-        policy = self.path / "xdg/config/harness-kit/policy.toml"
-        policy.parent.mkdir(parents=True)
-        policy.write_text('[agents.scout.pi]\nmodel = "model\\ntools: bash"\n')
+        self.write_machine_policy('[agents.scout.pi]\nmodel = "model\\ntools: bash"\n')
         result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 2)
         self.assertIn("model must be a non-empty single-line string", result.stderr)
