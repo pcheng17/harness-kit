@@ -1,39 +1,59 @@
-[models.claude]
-fast = "haiku"
-standard = "sonnet"
-strong = "opus"
-frontier = "fable"
+[agents.builder.claude]
+model = "sonnet"
+effort = "medium"
 
-[models.codex]
-fast = "gpt-5.6-luna"
-standard = "gpt-5.6-terra"
-strong = "gpt-5.6-sol"
-frontier = "gpt-6-astra"
+[agents.builder.pi]
+model = "openai-codex/gpt-5.6-terra"
+effort = "medium"
 
-[models.pi.codex]
-fast = "openai-codex/gpt-5.6-luna"
-standard = "openai-codex/gpt-5.6-terra"
-strong = "openai-codex/gpt-5.6-sol"
-frontier = "openai-codex/gpt-6-astra"
+[agents.builder.codex]
+model = "gpt-5.6-terra"
+effort = "medium"
 
-[models.pi.anthropic]
-fast = "anthropic/claude-haiku-4-5"
-standard = "anthropic/claude-sonnet-5"
-strong = "anthropic/claude-opus-5"
-frontier = "anthropic/claude-fable-5-1"
+[agents.debugger.claude]
+model = "opus"
+effort = "medium"
 
-[tools.claude]
-read = "Read"
-grep = "Grep"
-find = "Glob"
-bash = "Bash"
-edit = "Edit"
-write = "Write"
+[agents.debugger.pi]
+model = "openai-codex/gpt-5.6-sol"
+effort = "medium"
 
-[tools.pi]
-read = "read"
-grep = "grep"
-find = "find"
-bash = "bash"
-edit = "edit"
-write = "write"
+[agents.debugger.codex]
+model = "gpt-5.6-sol"
+effort = "medium"
+
+[agents.refuter.claude]
+model = "opus"
+effort = "medium"
+
+[agents.refuter.pi]
+model = "openai-codex/gpt-5.6-sol"
+effort = "medium"
+
+[agents.refuter.codex]
+model = "gpt-5.6-sol"
+effort = "medium"
+
+[agents.researcher.claude]
+model = "sonnet"
+effort = "medium"
+
+[agents.researcher.pi]
+model = "openai-codex/gpt-5.6-terra"
+effort = "medium"
+
+[agents.researcher.codex]
+model = "gpt-5.6-terra"
+effort = "medium"
+
+[agents.scout.claude]
+model = "sonnet"
+effort = "medium"
+
+[agents.scout.pi]
+model = "openai-codex/gpt-5.6-terra"
+effort = "medium"
+
+[agents.scout.codex]
+model = "gpt-5.6-terra"
+effort = "medium"

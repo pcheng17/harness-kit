@@ -1,11 +1,3 @@
 name = "builder"
 description = "Implements from a clear spec and runs the tests"
-model_tier = "standard"
-reasoning_effort = "medium"
 tools = ["read", "grep", "find", "edit", "write", "bash"]
-
-[claude]
-color = "green"
-
-[pi]
-provider = "codex"

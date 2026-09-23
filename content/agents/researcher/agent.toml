@@ -1,11 +1,3 @@
 name = "researcher"
 description = "Reads docs/source and reports back facts; marks anything it can't verify as unverified"
-model_tier = "standard"
-reasoning_effort = "medium"
 tools = ["read", "grep", "find", "bash"]
-
-[claude]
-color = "yellow"
-
-[pi]
-provider = "codex"

@@ -17,20 +17,11 @@ ROOT = Path(__file__).resolve().parents[2]
 GENERATED = ROOT / ".generated"
 COMMON_INSTRUCTIONS = ROOT / "content/instructions/AGENTS.md"
 COMPONENTS = frozenset(("skills", "agents", "instructions"))
-MACHINE_POLICY_TEMPLATE = """# Optional machine-specific overrides for harness-kit.
-# Repository defaults remain active for every value omitted here.
-#
-# Example:
-# [models.pi.anthropic]
-# strong = "anthropic/claude-opus-5"
-#
-# [agents.debugger]
-# model_tier = "strong"
-# reasoning_effort = "high"
-#
-# [agents.debugger.pi]
-# provider = "anthropic"
-"""
+CAPABILITY_TOOLS = {
+    "claude": {"read": "Read", "grep": "Grep", "find": "Glob", "bash": "Bash", "edit": "Edit", "write": "Write"},
+    "pi": {"read": "read", "grep": "grep", "find": "find", "bash": "bash", "edit": "edit", "write": "write"},
+}
+HARNESSES = frozenset(("claude", "pi", "codex"))
 
 
 class KitError(RuntimeError):
@@ -41,13 +32,8 @@ class KitError(RuntimeError):
 class Agent:
     name: str
     description: str
-    tier: str
-    reasoning_effort: str
     tools: tuple[str, ...]
     prompt: str
-    claude: dict[str, Any]
-    pi: dict[str, Any]
-    codex: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -98,56 +84,52 @@ def machine_policy_path() -> Path:
     return root / "harness-kit/policy.toml"
 
 
-def merge_tables(base: dict[str, Any], override: dict[str, Any], path: str = "policy") -> dict[str, Any]:
-    merged = dict(base)
-    for key, value in override.items():
-        location = f"{path}.{key}"
-        if key not in merged:
-            merged[key] = value
-            continue
-        existing = merged[key]
-        if isinstance(existing, dict) and isinstance(value, dict):
-            merged[key] = merge_tables(existing, value, location)
-        elif isinstance(existing, dict) or isinstance(value, dict) or type(existing) is not type(value):
-            raise KitError(f"{location} has incompatible base and machine-policy types")
-        else:
-            merged[key] = value
+def load_machine_policy() -> dict[str, Any]:
+    path = machine_policy_path()
+    if not path.exists():
+        return {}
+    policy = load_toml(path)
+    unknown = sorted(set(policy) - {"agents"})
+    if unknown:
+        raise KitError(f"{path}: unknown top-level setting {unknown[0]!r}")
+    agents = policy.get("agents", {})
+    if not isinstance(agents, dict):
+        raise KitError("machine policy agents must be a table")
+    return agents
+
+
+def validate_policy_value(value: Any, location: str) -> None:
+    # Models and effort are interpolated into YAML front matter as single lines.
+    if not isinstance(value, str) or not value.strip() or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise KitError(f"{location} must be a non-empty single-line string")
+
+
+def validate_machine_overrides(overrides: dict[str, Any], names: set[str]) -> None:
+    unknown_agents = sorted(set(overrides) - names)
+    if unknown_agents:
+        raise KitError(f"machine policy references unknown agent {unknown_agents[0]!r}")
+    for name, override in overrides.items():
+        if not isinstance(override, dict):
+            raise KitError(f"machine policy agent {name!r} must be a table")
+        unknown_harnesses = sorted(set(override) - HARNESSES)
+        if unknown_harnesses:
+            raise KitError(f"machine policy agent {name!r}: unknown harness {unknown_harnesses[0]!r}")
+        for harness, settings in override.items():
+            if not isinstance(settings, dict):
+                raise KitError(f"machine policy agent {name!r}.{harness} must be a table")
+            unknown = sorted(set(settings) - {"model", "effort"})
+            if unknown:
+                raise KitError(f"machine policy agent {name!r}.{harness}: unknown setting {unknown[0]!r}")
+            for field, value in settings.items():
+                validate_policy_value(value, f"machine policy agent {name!r}.{harness} {field}")
+
+
+def merge_machine_policy(policy: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
+    merged = {"agents": {name: dict(settings) for name, settings in policy["agents"].items()}}
+    for name, harnesses in overrides.items():
+        for harness, values in harnesses.items():
+            merged["agents"][name][harness] = {**merged["agents"][name][harness], **values}
     return merged
-
-
-def load_policy() -> dict[str, Any]:
-    policy = load_toml(ROOT / "policy.toml")
-    override_path = machine_policy_path()
-    if not override_path.exists():
-        return policy
-    override = load_toml(override_path)
-    unknown = sorted(set(override) - {"models", "tools", "agents"})
-    if unknown:
-        raise KitError(f"{override_path}: unknown top-level setting {unknown[0]!r}")
-    return merge_tables(policy, override)
-
-
-def validate_agent_override(name: str, override: Any) -> None:
-    if not isinstance(override, dict):
-        raise KitError(f"machine policy agent {name!r} must be a table")
-    allowed = {"model_tier", "reasoning_effort", "claude", "pi", "codex"}
-    unknown = sorted(set(override) - allowed)
-    if unknown:
-        raise KitError(f"machine policy agent {name!r}: unknown setting {unknown[0]!r}")
-    harness_fields = {
-        "claude": {"effort", "color"},
-        "pi": {"provider", "thinking", "isolated"},
-        "codex": {"model", "model_reasoning_effort"},
-    }
-    for harness, fields in harness_fields.items():
-        if harness not in override:
-            continue
-        settings = override[harness]
-        if not isinstance(settings, dict):
-            raise KitError(f"machine policy agent {name!r}.{harness} must be a table")
-        unknown_fields = sorted(set(settings) - fields)
-        if unknown_fields:
-            raise KitError(f"machine policy agent {name!r}.{harness}: unknown setting {unknown_fields[0]!r}")
 
 
 def load_catalog(harness: str, components: frozenset[str]) -> tuple[dict[str, Any], list[Agent]]:
@@ -156,27 +138,23 @@ def load_catalog(harness: str, components: frozenset[str]) -> tuple[dict[str, An
     if "agents" not in components:
         return {}, []
 
-    policy = load_policy()
-    agent_overrides = policy.get("agents", {})
-    if not isinstance(agent_overrides, dict):
-        raise KitError("machine policy agents must be a table")
-    for name, override in agent_overrides.items():
-        validate_agent_override(name, override)
+    policy = load_toml(ROOT / "policy.toml")
+    agent_overrides = load_machine_policy()
 
     agents: list[Agent] = []
     names: set[str] = set()
     for metadata_path in sorted((ROOT / "content/agents").glob("*/agent.toml")):
         data = load_toml(metadata_path)
-        authored_name = data.get("name")
-        if isinstance(authored_name, str) and authored_name in agent_overrides:
-            data = merge_tables(data, agent_overrides[authored_name], f"agents.{authored_name}")
         prompt_path = metadata_path.with_name("prompt.md")
         if not prompt_path.is_file():
             raise KitError(f"missing prompt: {prompt_path}")
-        required = ("name", "description", "model_tier", "reasoning_effort", "tools")
+        required = ("name", "description", "tools")
         missing = [field for field in required if field not in data]
         if missing:
             raise KitError(f"{metadata_path}: missing {', '.join(missing)}")
+        unknown = sorted(set(data) - set(required))
+        if unknown:
+            raise KitError(f"{metadata_path}: unknown setting {unknown[0]!r}")
         name = data["name"]
         if not isinstance(name, str) or not name or name in names:
             raise KitError(f"{metadata_path}: agent name must be unique and non-empty")
@@ -185,78 +163,46 @@ def load_catalog(harness: str, components: frozenset[str]) -> tuple[dict[str, An
         if name in (".", "..") or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for character in name):
             raise KitError(f"{metadata_path}: agent name must be a safe identifier component")
         names.add(name)
-        tier = data["model_tier"]
-        reasoning_effort = data["reasoning_effort"]
         tools = data["tools"]
-        if not isinstance(data["description"], str) or not isinstance(tier, str) or not isinstance(reasoning_effort, str) or not reasoning_effort or not isinstance(tools, list) or not all(isinstance(tool, str) for tool in tools):
-            raise KitError(f"{metadata_path}: invalid description, model_tier, reasoning_effort, or tools")
-        agents.append(Agent(name, data["description"], tier, reasoning_effort, tuple(tools), prompt_path.read_text(), data.get("claude", {}), data.get("pi", {}), data.get("codex", {})))
+        if not isinstance(data["description"], str) or not isinstance(tools, list) or not all(isinstance(tool, str) for tool in tools):
+            raise KitError(f"{metadata_path}: invalid description or tools")
+        agents.append(Agent(name, data["description"], tuple(tools), prompt_path.read_text()))
     if not agents:
         raise KitError("no agents found")
-    unknown_agents = sorted(set(agent_overrides) - names)
+    validate_machine_overrides(agent_overrides, names)
+    validate_catalog(policy, agents)
+    return merge_machine_policy(policy, agent_overrides), agents
+
+
+def validate_catalog(policy: dict[str, Any], agents: list[Agent]) -> None:
+    if set(policy) != {"agents"} or not isinstance(policy["agents"], dict):
+        raise KitError("policy.toml must contain only an agents table")
+    names = {agent.name for agent in agents}
+    unknown_agents = sorted(set(policy["agents"]) - names)
     if unknown_agents:
-        raise KitError(f"machine policy references unknown agent {unknown_agents[0]!r}")
-    validate_catalog(policy, agents, harness)
-    return policy, agents
-
-
-def validate_effort(agent: Agent, metadata: dict[str, Any], field: str, harness: str) -> None:
-    value = metadata.get(field, agent.reasoning_effort)
-    if not isinstance(value, str) or not value:
-        raise KitError(f"{agent.name}: {harness} {field} must be a non-empty string")
-
-
-def validate_catalog(policy: dict[str, Any], agents: list[Agent], harness: str) -> None:
-    try:
-        models = policy["models"]
-        tools_by_harness = policy["tools"]
-    except KeyError as error:
-        raise KitError(f"policy.toml missing {error}") from error
+        raise KitError(f"policy.toml references unknown agent {unknown_agents[0]!r}")
     for agent in agents:
-        if harness in ("all", "claude"):
-            if not isinstance(agent.claude, dict):
-                raise KitError(f"{agent.name}: Claude metadata must be a table")
-            try:
-                claude_models = models["claude"]
-                claude_tools = tools_by_harness["claude"]
-            except KeyError as error:
-                raise KitError(f"policy.toml missing {error}") from error
-            if agent.tier not in claude_models:
-                raise KitError(f"{agent.name}: unknown model tier {agent.tier!r} for Claude")
-            validate_effort(agent, agent.claude, "effort", "Claude")
+        if agent.name not in policy["agents"] or not isinstance(policy["agents"][agent.name], dict):
+            raise KitError(f"policy.toml missing defaults for agent {agent.name!r}")
+        harnesses = policy["agents"][agent.name]
+        missing = sorted(HARNESSES - set(harnesses))
+        if missing:
+            raise KitError(f"policy.toml missing defaults for {agent.name!r}.{missing[0]}")
+        unknown = sorted(set(harnesses) - HARNESSES)
+        if unknown:
+            raise KitError(f"policy.toml agent {agent.name!r}: unknown harness {unknown[0]!r}")
+        for harness in HARNESSES:
+            settings = harnesses[harness]
+            if not isinstance(settings, dict):
+                raise KitError(f"policy.toml {agent.name!r}.{harness} must be a table")
+            if set(settings) != {"model", "effort"}:
+                raise KitError(f"policy.toml {agent.name!r}.{harness} must contain only model and effort")
+            for field in ("model", "effort"):
+                validate_policy_value(settings[field], f"policy.toml {agent.name!r}.{harness} {field}")
+        for harness in ("claude", "pi"):
             for tool in agent.tools:
-                if tool not in claude_tools:
-                    raise KitError(f"{agent.name}: unknown tool capability {tool!r} for Claude")
-        if harness in ("all", "pi"):
-            if not isinstance(agent.pi, dict):
-                raise KitError(f"{agent.name}: Pi metadata must be a table")
-            try:
-                pi_models = models["pi"]
-                pi_tools = tools_by_harness["pi"]
-            except KeyError as error:
-                raise KitError(f"policy.toml missing {error}") from error
-            provider = agent.pi.get("provider", "codex")
-            if not isinstance(provider, str) or provider not in pi_models or agent.tier not in pi_models[provider]:
-                raise KitError(f"{agent.name}: unknown Pi provider/tier {provider!r}/{agent.tier!r}")
-            validate_effort(agent, agent.pi, "thinking", "Pi")
-            for tool in agent.tools:
-                if tool not in pi_tools:
-                    raise KitError(f"{agent.name}: unknown tool capability {tool!r} for Pi")
-        if harness in ("all", "codex"):
-            if not isinstance(agent.codex, dict):
-                raise KitError(f"{agent.name}: Codex metadata must be a table")
-            try:
-                codex_models = models["codex"]
-            except KeyError as error:
-                raise KitError(f"policy.toml missing {error}") from error
-            if agent.tier not in codex_models:
-                raise KitError(f"{agent.name}: unknown model tier {agent.tier!r} for Codex")
-            model = codex_models[agent.tier]
-            if not isinstance(model, str) or not model:
-                raise KitError(f"{agent.name}: invalid Codex model for tier {agent.tier!r}")
-            if "model" in agent.codex and (not isinstance(agent.codex["model"], str) or not agent.codex["model"]):
-                raise KitError(f"{agent.name}: Codex model must be a non-empty string")
-            validate_effort(agent, agent.codex, "model_reasoning_effort", "Codex")
+                if tool not in CAPABILITY_TOOLS[harness]:
+                    raise KitError(f"{agent.name}: unknown tool capability {tool!r} for {harness.title()}")
 
 
 def toml_string(value: str) -> str:
@@ -267,41 +213,43 @@ def toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
 
 
+def yaml_string(value: str) -> str:
+    """JSON strings are valid YAML double-quoted scalars, including escapes."""
+    return json.dumps(value, ensure_ascii=True)
+
+
 def render(policy: dict[str, Any], agents: list[Agent], harness: str) -> dict[Path, str]:
     files: dict[Path, str] = {}
     for agent in agents:
         if harness in ("all", "codex"):
+            settings = policy["agents"][agent.name]["codex"]
             codex = "\n".join((
                 f"name = {toml_string(agent.name)}",
                 f"description = {toml_string(agent.description)}",
-                f"model = {toml_string(agent.codex.get('model', policy['models']['codex'][agent.tier]))}",
-                f"model_reasoning_effort = {toml_string(agent.codex.get('model_reasoning_effort', agent.reasoning_effort))}",
+                f"model = {toml_string(settings['model'])}",
+                f"model_reasoning_effort = {toml_string(settings['effort'])}",
                 f"developer_instructions = {toml_string(agent.prompt)}",
                 "",
             ))
             files[GENERATED / "codex/agents" / f"{agent.name}.toml"] = codex
         if harness in ("all", "claude"):
+            settings = policy["agents"][agent.name]["claude"]
             claude = [
-                "---", f"name: {agent.name}", f"description: {agent.description}",
-                f"tools: {', '.join(policy['tools']['claude'][tool] for tool in agent.tools)}",
-                f"model: {policy['models']['claude'][agent.tier]}",
-                f"effort: {agent.claude.get('effort', agent.reasoning_effort)}",
+                "---", f"name: {agent.name}", f"description: {yaml_string(agent.description)}",
+                f"tools: {', '.join(CAPABILITY_TOOLS['claude'][tool] for tool in agent.tools)}",
+                f"model: {yaml_string(settings['model'])}",
+                f"effort: {yaml_string(settings['effort'])}",
             ]
-            if color := agent.claude.get("color"):
-                claude.append(f"color: {color}")
             claude.extend(["---", "", agent.prompt.rstrip(), ""])
             files[GENERATED / "claude/agents" / f"{agent.name}.md"] = "\n".join(claude)
         if harness in ("all", "pi"):
-            provider = agent.pi.get("provider", "codex")
+            settings = policy["agents"][agent.name]["pi"]
             pi = [
-                "---", f"name: {agent.name}", f"description: {agent.description}",
-                f"tools: {', '.join(policy['tools']['pi'][tool] for tool in agent.tools)}",
-                f"model: {policy['models']['pi'][provider][agent.tier]}",
+                "---", f"name: {agent.name}", f"description: {yaml_string(agent.description)}",
+                f"tools: {', '.join(CAPABILITY_TOOLS['pi'][tool] for tool in agent.tools)}",
+                f"model: {yaml_string(settings['model'])}",
+                f"thinking: {yaml_string(settings['effort'])}",
             ]
-            pi.append(f"thinking: {agent.pi.get('thinking', agent.reasoning_effort)}")
-            if "isolated" in agent.pi:
-                value = str(agent.pi["isolated"]).lower() if isinstance(agent.pi["isolated"], bool) else agent.pi["isolated"]
-                pi.append(f"isolated: {value}")
             pi.extend(["---", "", agent.prompt.rstrip(), ""])
             files[GENERATED / "pi/agents" / f"{agent.name}.md"] = "\n".join(pi)
     return files
@@ -612,25 +560,10 @@ def check(harness: str, components: frozenset[str]) -> int:
     return 0
 
 
-def configure() -> int:
-    destination = machine_policy_path()
-    try:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with destination.open("x") as file:
-            file.write(MACHINE_POLICY_TEMPLATE)
-    except FileExistsError as error:
-        raise KitError(f"machine policy already exists: {destination}") from error
-    except OSError as error:
-        raise KitError(f"cannot create {destination}: {error}") from error
-    print(f"Created optional machine policy: {destination}")
-    return 0
-
-
 COMMAND_HELP = {
     "preview": "show what install would change, without touching the filesystem",
     "install": "deploy content into the harness(es)",
     "check": "exit non-zero if the harness(es) are not converged with content",
-    "configure": "create an optional machine-specific policy file",
 }
 
 
@@ -639,16 +572,13 @@ def main(argv: list[str] | None = None) -> int:
         prog="harness-kit",
         description="Deploy shared agent, skill, and instruction content into supported harnesses.",
     )
-    subcommands = parser.add_subparsers(dest="command", required=True, metavar="{preview,install,check,configure}")
+    subcommands = parser.add_subparsers(dest="command", required=True, metavar="{preview,install,check}")
     for command in ("preview", "install", "check"):
         item = subcommands.add_parser(command, help=COMMAND_HELP[command], description=COMMAND_HELP[command])
         item.add_argument("--harness", choices=("all", "claude", "pi", "codex"), default="all", help="limit to this harness (default: all)")
         item.add_argument("--component", action="append", choices=("skills", "agents", "instructions"), help="deploy only this component (repeatable)")
-    subcommands.add_parser("configure", help=COMMAND_HELP["configure"], description=COMMAND_HELP["configure"])
     args = parser.parse_args(argv)
     try:
-        if args.command == "configure":
-            return configure()
         components = frozenset(args.component) if args.component else COMPONENTS
         if args.command == "preview":
             policy, agents = load_catalog(args.harness, components)

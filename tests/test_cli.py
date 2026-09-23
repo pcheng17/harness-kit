@@ -775,59 +775,52 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(canary.read_text(), "protected\\n")
         self.assertFalse((self.project / ".generated").exists())
 
-    def test_shared_reasoning_effort_renders_for_all_harnesses(self) -> None:
+    def test_explicit_model_and_effort_render_for_all_harnesses(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "all", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)
-        expected_models = {"builder": "gpt-5.6-terra", "debugger": "gpt-5.6-sol", "refuter": "gpt-5.6-sol", "researcher": "gpt-5.6-terra", "scout": "gpt-5.6-terra"}
-        for name, model in expected_models.items():
-            metadata = tomllib.loads((self.project / f"content/agents/{name}/agent.toml").read_text())
-            self.assertEqual(metadata["reasoning_effort"], "medium")
-            self.assertIn("effort: medium\n", (self.project / f".generated/claude/agents/{name}.md").read_text())
-            self.assertIn("thinking: medium\n", (self.project / f".generated/pi/agents/{name}.md").read_text())
+        policy = tomllib.loads((self.project / "policy.toml").read_text())
+        for name, settings in policy["agents"].items():
+            self.assertEqual(set(settings), {"claude", "pi", "codex"})
+            for harness, output_field in (("claude", "effort"), ("pi", "thinking")):
+                rendered = (self.project / f".generated/{harness}/agents/{name}.md").read_text()
+                self.assertIn(f"model: {json.dumps(settings[harness]['model'])}\n", rendered)
+                self.assertIn(f"{output_field}: {json.dumps(settings[harness]['effort'])}\n", rendered)
             codex = tomllib.loads((self.project / f".generated/codex/agents/{name}.toml").read_text())
-            self.assertEqual(codex["model"], model)
-            self.assertEqual(codex["model_reasoning_effort"], "medium")
+            self.assertEqual(codex["model"], settings["codex"]["model"])
+            self.assertEqual(codex["model_reasoning_effort"], settings["codex"]["effort"])
+
+    def test_agent_metadata_contains_only_identity_and_capabilities(self) -> None:
+        for path in self.project.glob("content/agents/*/agent.toml"):
+            self.assertEqual(set(tomllib.loads(path.read_text())), {"name", "description", "tools"})
 
     def test_harness_overrides_take_precedence(self) -> None:
-        metadata = self.project / "content/agents/scout/agent.toml"
-        metadata.write_text(
-            metadata.read_text()
-            .replace('[claude]\ncolor = "cyan"', '[claude]\ncolor = "cyan"\neffort = "low"')
-            .replace('provider = "codex"', 'provider = "codex"\nthinking = "high"')
-            + '\n[codex]\nmodel = "gpt-5.6-custom"\nmodel_reasoning_effort = "minimal"\n'
-        )
-        result = invoke(self.sandbox, "install", "--harness", "all", "--component", "agents")
+        policy = self.path / "xdg/config/harness-kit/policy.toml"
+        policy.parent.mkdir(parents=True)
+        policy.write_text('[agents.scout.pi]\nmodel = "machine/pi"\neffort = "high"\n')
+        result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("effort: low\n", (self.project / ".generated/claude/agents/scout.md").read_text())
-        self.assertIn("thinking: high\n", (self.project / ".generated/pi/agents/scout.md").read_text())
-        codex = tomllib.loads((self.project / ".generated/codex/agents/scout.toml").read_text())
-        self.assertEqual(codex["model"], "gpt-5.6-custom")
-        self.assertEqual(codex["model_reasoning_effort"], "minimal")
+        rendered = (self.project / ".generated/pi/agents/scout.md").read_text()
+        self.assertIn('model: "machine/pi"\n', rendered)
+        self.assertIn('thinking: "high"\n', rendered)
 
-    def test_codex_policy_and_metadata_validation(self) -> None:
+    def test_checked_in_policy_requires_complete_defaults(self) -> None:
         policy = self.project / "policy.toml"
-        original_policy = policy.read_text()
-        policy.write_text(original_policy.replace('standard = "gpt-5.6-terra"', 'standard = 42', 1))
+        original = policy.read_text()
+        policy.write_text(original.replace('model = "gpt-5.6-terra"', 'model = 42', 1))
         result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents")
         self.assertEqual(result.returncode, 2)
-        self.assertIn("invalid Codex model", result.stderr)
-        policy.write_text(original_policy)
-
-        metadata = self.project / "content/agents/scout/agent.toml"
-        metadata.write_text(metadata.read_text() + "\n[codex]\nmodel_reasoning_effort = 1\n")
+        self.assertIn("model must be a non-empty single-line string", result.stderr)
+        policy.write_text(original.replace('[agents.scout.codex]\nmodel = "gpt-5.6-terra"\neffort = "medium"\n', ''))
         result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents")
         self.assertEqual(result.returncode, 2)
-        self.assertIn("model_reasoning_effort must be a non-empty string", result.stderr)
+        self.assertIn("missing defaults", result.stderr)
 
-    def test_codex_model_override_must_be_a_non_empty_string(self) -> None:
+    def test_agent_metadata_rejects_policy_fields(self) -> None:
         metadata = self.project / "content/agents/scout/agent.toml"
-        original = metadata.read_text()
-        for value in ("42", '\"\"'):
-            with self.subTest(value=value):
-                metadata.write_text(original + f"\n[codex]\nmodel = {value}\n")
-                result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents")
-                self.assertEqual(result.returncode, 2)
-                self.assertIn("Codex model must be a non-empty string", result.stderr)
+        metadata.write_text(metadata.read_text() + '\n[codex]\nmodel = "override"\n')
+        result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unknown setting 'codex'", result.stderr)
 
     def test_scoped_install_preserves_other_harness_links(self) -> None:
         self.assertEqual(invoke(self.sandbox, "install").returncode, 0)
@@ -931,14 +924,11 @@ class HarnessKitTests(unittest.TestCase):
 
     def test_unselected_malformed_content_is_not_loaded(self) -> None:
         metadata = self.project / "content/agents/scout/agent.toml"
-        original = metadata.read_text()
-        metadata.write_text(original.replace("[claude]", "pi = \"broken\"\n\n[claude]").replace("\n[pi]\nisolated = true\nprovider = \"codex\"\n", "\n"))
-        try:
-            self.assertEqual(invoke(self.sandbox, "preview", "--component", "skills").returncode, 0)
-            self.assertEqual(invoke(self.sandbox, "preview", "--harness", "claude", "--component", "agents").returncode, 0)
-            self.assertEqual(invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents").returncode, 2)
-        finally:
-            metadata.write_text(original)
+        metadata.write_text(metadata.read_text() + '\nmodel_tier = "broken"\n')
+        self.assertEqual(invoke(self.sandbox, "preview", "--component", "skills").returncode, 0)
+        result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unknown setting 'model_tier'", result.stderr)
 
     def test_agents_only_does_not_require_instructions(self) -> None:
         instructions = self.project / "content/instructions/AGENTS.md"
@@ -1256,28 +1246,30 @@ class HarnessKitTests(unittest.TestCase):
     def test_machine_policy_overrides_agent_and_model_settings(self) -> None:
         policy = self.path / "xdg/config/harness-kit/policy.toml"
         policy.parent.mkdir(parents=True)
-        policy.write_text(
-            "[models.pi.anthropic]\n"
-            'strong = "anthropic/machine-strong"\n'
-            "\n"
-            "[agents.builder]\n"
-            'model_tier = "strong"\n'
-            'reasoning_effort = "high"\n'
-            "\n"
-            "[agents.builder.pi]\n"
-            'provider = "anthropic"\n'
-        )
-
+        policy.write_text('[agents.builder.pi]\nmodel = "machine/pi"\neffort = "high"\n')
         result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)
         rendered = (self.project / ".generated/pi/agents/builder.md").read_text()
-        self.assertIn("model: anthropic/machine-strong", rendered)
-        self.assertIn("thinking: high", rendered)
+        self.assertIn('model: "machine/pi"', rendered)
+        self.assertIn('thinking: "high"', rendered)
+
+    def test_machine_policy_partial_override_preserves_other_defaults(self) -> None:
+        policy = self.path / "xdg/config/harness-kit/policy.toml"
+        policy.parent.mkdir(parents=True)
+        policy.write_text('[agents.builder.pi]\neffort = "high"\n')
+        result = invoke(self.sandbox, "install", "--harness", "all", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        pi = (self.project / ".generated/pi/agents/builder.md").read_text()
+        claude = (self.project / ".generated/claude/agents/builder.md").read_text()
+        self.assertIn('model: "openai-codex/gpt-5.6-terra"\n', pi)
+        self.assertIn('thinking: "high"\n', pi)
+        self.assertIn('model: "sonnet"\n', claude)
+        self.assertIn('effort: "medium"\n', claude)
 
     def test_machine_policy_rejects_unknown_agent(self) -> None:
         policy = self.path / "xdg/config/harness-kit/policy.toml"
         policy.parent.mkdir(parents=True)
-        policy.write_text("[agents.missing]\nmodel_tier = \"strong\"\n")
+        policy.write_text('[agents.missing.pi]\nmodel = "unused"\n')
 
         result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 2)
@@ -1286,8 +1278,7 @@ class HarnessKitTests(unittest.TestCase):
     def test_machine_policy_rejects_unknown_agent_setting(self) -> None:
         policy = self.path / "xdg/config/harness-kit/policy.toml"
         policy.parent.mkdir(parents=True)
-        policy.write_text("[agents.builder]\nunknown = \"value\"\n")
-
+        policy.write_text('[agents.builder.pi]\nunknown = "value"\n')
         result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 2)
         self.assertIn("unknown setting 'unknown'", result.stderr)
@@ -1295,29 +1286,54 @@ class HarnessKitTests(unittest.TestCase):
     def test_machine_policy_rejects_incompatible_override_type(self) -> None:
         policy = self.path / "xdg/config/harness-kit/policy.toml"
         policy.parent.mkdir(parents=True)
-        policy.write_text("[models.pi.codex]\nstandard = 42\n")
-
+        policy.write_text('[agents.builder.pi]\nmodel = 42\n')
         result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 2)
-        self.assertIn("incompatible base and machine-policy types", result.stderr)
+        self.assertIn("model must be a non-empty single-line string", result.stderr)
+
+    def test_machine_policy_rejects_tool_mapping_overrides(self) -> None:
+        policy = self.path / "xdg/config/harness-kit/policy.toml"
+        policy.parent.mkdir(parents=True)
+        policy.write_text('[tools.pi]\nread = "bash"\n')
+        result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unknown top-level setting 'tools'", result.stderr)
+
+    def test_machine_policy_quotes_yaml_significant_values(self) -> None:
+        policy = self.path / "xdg/config/harness-kit/policy.toml"
+        policy.parent.mkdir(parents=True)
+        policy.write_text('[agents.scout.pi]\nmodel = "*undefined_alias"\neffort = "true"\n')
+        result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = (self.project / ".generated/pi/agents/scout.md").read_text()
+        self.assertIn('model: "*undefined_alias"\n', rendered)
+        self.assertIn('thinking: "true"\n', rendered)
+
+    def test_agent_description_is_yaml_quoted(self) -> None:
+        metadata = self.project / "content/agents/scout/agent.toml"
+        metadata.write_text(metadata.read_text().replace('description = "Finds files, symbols, call sites, and references; reports locations instead of dumping whole files"', 'description = "Reads: files # not a YAML comment"'))
+        result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = (self.project / ".generated/pi/agents/scout.md").read_text()
+        self.assertIn('description: "Reads: files # not a YAML comment"\n', rendered)
+
+    def test_machine_policy_rejects_multiline_model_injection(self) -> None:
+        policy = self.path / "xdg/config/harness-kit/policy.toml"
+        policy.parent.mkdir(parents=True)
+        policy.write_text('[agents.scout.pi]\nmodel = "model\\ntools: bash"\n')
+        result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("model must be a non-empty single-line string", result.stderr)
 
     def test_install_does_not_create_machine_policy(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.path / "xdg/config/harness-kit/policy.toml").exists())
 
-    def test_configure_creates_optional_machine_policy_without_overwriting(self) -> None:
-        configured = invoke(self.sandbox, "configure")
-        policy = self.path / "xdg/config/harness-kit/policy.toml"
-        self.assertEqual(configured.returncode, 0, configured.stderr)
-        self.assertTrue(policy.is_file())
-        self.assertIn("machine-specific overrides", policy.read_text())
-        original = policy.read_text()
-
-        repeated = invoke(self.sandbox, "configure")
-        self.assertEqual(repeated.returncode, 2)
-        self.assertIn("already exists", repeated.stderr)
-        self.assertEqual(policy.read_text(), original)
+    def test_configure_is_not_a_command(self) -> None:
+        result = invoke(self.sandbox, "configure")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("invalid choice", result.stderr)
 
 
 if __name__ == "__main__":
