@@ -22,6 +22,7 @@ CAPABILITY_TOOLS = {
     "pi": {"read": "read", "grep": "grep", "find": "find", "bash": "bash", "edit": "edit", "write": "write"},
 }
 HARNESSES = ("claude", "pi", "codex")
+POLICY_FIELDS = ("model", "effort")
 
 
 class KitError(RuntimeError):
@@ -127,13 +128,14 @@ def validate_policy_agents(
             settings = harnesses[harness]
             if not isinstance(settings, dict):
                 raise KitError(f"{location}: {name!r}.{harness} must be a table")
-            if complete and set(settings) != {"model", "effort"}:
+            if complete and set(settings) != set(POLICY_FIELDS):
                 raise KitError(f"{location}: {name!r}.{harness} must contain only model and effort")
-            unknown_fields = sorted(set(settings) - {"model", "effort"})
+            unknown_fields = sorted(set(settings) - set(POLICY_FIELDS))
             if unknown_fields:
                 raise KitError(f"{location}: {name!r}.{harness}: unknown setting {unknown_fields[0]!r}")
-            for field, value in settings.items():
-                validate_policy_value(value, f"{location}: {name!r}.{harness} {field}")
+            for field in POLICY_FIELDS:
+                if field in settings:
+                    validate_policy_value(settings[field], f"{location}: {name!r}.{harness} {field}")
 
 
 def merge_machine_policy(policy: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
