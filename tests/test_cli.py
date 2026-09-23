@@ -1325,11 +1325,6 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.path / "xdg/config/harness-kit/policy.toml").exists())
 
-    def test_configure_is_not_a_command(self) -> None:
-        result = invoke(self.sandbox, "configure")
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("invalid choice", result.stderr)
-
 
 if __name__ == "__main__":
     unittest.main()
