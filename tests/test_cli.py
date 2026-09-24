@@ -149,7 +149,7 @@ class HarnessKitTests(unittest.TestCase):
         self.temp.cleanup()
 
     def write_machine_policy(self, text: str) -> Path:
-        policy = self.path / "xdg/config/harness-kit/policy.toml"
+        policy = self.path / "xdg/config/harness-kit/config.toml"
         policy.parent.mkdir(parents=True, exist_ok=True)
         policy.write_text(text)
         return policy
@@ -787,7 +787,7 @@ class HarnessKitTests(unittest.TestCase):
     def test_explicit_model_and_effort_render_for_all_harnesses(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "all", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)
-        policy = tomllib.loads((self.project / "policy.toml").read_text())
+        policy = tomllib.loads((self.project / "config.toml").read_text())
         for name, settings in policy["agents"].items():
             self.assertEqual(set(settings), {"claude", "pi", "codex"})
             for harness, output_field in (("claude", "effort"), ("pi", "thinking")):
@@ -803,7 +803,7 @@ class HarnessKitTests(unittest.TestCase):
             self.assertEqual(set(tomllib.loads(path.read_text())), {"name", "description", "tools"})
 
     def test_relative_xdg_config_home_uses_home_fallback(self) -> None:
-        policy = self.path / "home/.config/harness-kit/policy.toml"
+        policy = self.path / "home/.config/harness-kit/config.toml"
         policy.parent.mkdir(parents=True)
         policy.write_text('[agents.scout.pi]\nmodel = "fallback/pi"\n')
         result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents",
@@ -813,7 +813,7 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn('model: "fallback/pi"', rendered)
 
     def test_checked_in_policy_requires_complete_defaults(self) -> None:
-        policy = self.project / "policy.toml"
+        policy = self.project / "config.toml"
         original = policy.read_text()
         policy.write_text(original.replace('codex.model = "gpt-5.6-terra"', 'codex.model = 42', 1))
         result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents")
@@ -1261,6 +1261,15 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn('model: "machine/pi"', rendered)
         self.assertIn('thinking: "high"', rendered)
 
+    def test_legacy_machine_policy_is_ignored(self) -> None:
+        legacy = self.path / "xdg/config/harness-kit/policy.toml"
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text('[agents.builder.pi]\nmodel = "legacy/pi"\n')
+        result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = (self.project / ".generated/pi/agents/builder.md").read_text()
+        self.assertIn('model: "openai-codex/gpt-5.6-terra"', rendered)
+
     def test_machine_policy_partial_override_preserves_other_defaults(self) -> None:
         self.write_machine_policy('[agents.builder.pi]\neffort = "high"\n')
         result = invoke(self.sandbox, "install", "--harness", "all", "--component", "agents")
@@ -1321,9 +1330,9 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn("model must be a non-empty single-line string", result.stderr)
 
     def test_dangling_machine_policy_symlink_is_an_error(self) -> None:
-        policy = self.path / "xdg/config/harness-kit/policy.toml"
+        policy = self.path / "xdg/config/harness-kit/config.toml"
         policy.parent.mkdir(parents=True)
-        policy.symlink_to(self.path / "missing-policy.toml")
+        policy.symlink_to(self.path / "missing-config.toml")
         result = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 2)
         self.assertIn(f"cannot read {policy}", result.stderr)
@@ -1331,7 +1340,7 @@ class HarnessKitTests(unittest.TestCase):
     def test_install_does_not_create_machine_policy(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse((self.path / "xdg/config/harness-kit/policy.toml").exists())
+        self.assertFalse((self.path / "xdg/config/harness-kit/config.toml").exists())
 
 
 if __name__ == "__main__":
