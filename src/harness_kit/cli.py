@@ -80,7 +80,7 @@ def machine_policy_path() -> Path:
     root = Path(configured) if configured else None
     if root is None or not root.is_absolute():
         root = home() / ".config"
-    return root / "harness-kit/policy.toml"
+    return root / "harness-kit/config.toml"
 
 
 def load_machine_policy() -> dict[str, Any]:
@@ -152,7 +152,7 @@ def load_catalog(harness: str, components: frozenset[str]) -> tuple[dict[str, An
     if "agents" not in components:
         return {}, []
 
-    policy = load_toml(ROOT / "policy.toml")
+    policy = load_toml(ROOT / "config.toml")
     agent_overrides = load_machine_policy()
 
     agents: list[Agent] = []
@@ -190,8 +190,8 @@ def load_catalog(harness: str, components: frozenset[str]) -> tuple[dict[str, An
 
 def validate_catalog(policy: dict[str, Any], agents: list[Agent]) -> None:
     if set(policy) != {"agents"} or not isinstance(policy["agents"], dict):
-        raise KitError("policy.toml must contain only an agents table")
-    validate_policy_agents(policy["agents"], [agent.name for agent in agents], ROOT / "policy.toml", complete=True)
+        raise KitError("config.toml must contain only an agents table")
+    validate_policy_agents(policy["agents"], [agent.name for agent in agents], ROOT / "config.toml", complete=True)
     for agent in agents:
         for harness in CAPABILITY_TOOLS:
             for tool in agent.tools:

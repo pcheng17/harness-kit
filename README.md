@@ -18,7 +18,7 @@ git pull --ff-only
 uv run harness-kit install
 ```
 
-The repository policy provides complete defaults. To customize an individual agent on one machine, create `$XDG_CONFIG_HOME/harness-kit/policy.toml` (or `~/.config/harness-kit/policy.toml` when `XDG_CONFIG_HOME` is unset) manually. Reload active harnesses afterward, for example `/reload` in Pi.
+The repository policy provides complete defaults. To customize an individual agent on one machine, create `$XDG_CONFIG_HOME/harness-kit/config.toml` (or `~/.config/harness-kit/config.toml` when `XDG_CONFIG_HOME` is unset) manually. Reload active harnesses afterward, for example `/reload` in Pi.
 
 ### Pi subagents
 
@@ -67,9 +67,9 @@ Each `content/agents/*/agent.toml` declares only `name`, `description`, and tool
 
 ## Policy
 
-Checked-in `policy.toml` supplies a concrete `model` and `effort` for every agent and each of Claude, Pi, and Codex. Missing defaults are invalid. The renderer translates `effort` to Claude `effort`, Pi `thinking`, and Codex `model_reasoning_effort`.
+Checked-in `config.toml` supplies a concrete `model` and `effort` for every agent and each of Claude, Pi, and Codex. Missing defaults are invalid. The renderer translates `effort` to Claude `effort`, Pi `thinking`, and Codex `model_reasoning_effort`.
 
-An optional `$XDG_CONFIG_HOME/harness-kit/policy.toml` (falling back to `~/.config/harness-kit/policy.toml`) is a partial override over those defaults. It may contain only known agents, known harnesses, and non-empty single-line string `model` and `effort` values:
+An optional `$XDG_CONFIG_HOME/harness-kit/config.toml` (falling back to `~/.config/harness-kit/config.toml`) is a partial override over those defaults. It may contain only known agents, known harnesses, and non-empty single-line string `model` and `effort` values:
 
 ```toml
 [agents.debugger.pi]
@@ -81,4 +81,4 @@ model = "gpt-5.6-sol"
 effort = "high"
 ```
 
-Machine values take precedence over checked-in defaults; omitted values retain the checked-in value. Model tiers, provider routing, and configurable tool mappings are not supported.
+Machine values take precedence over checked-in defaults; omitted values retain the checked-in value. Existing machine `policy.toml` files must be renamed to `config.toml`; the old name is not read. Model tiers, provider routing, and configurable tool mappings are not supported.
