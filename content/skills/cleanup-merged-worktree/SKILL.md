@@ -7,7 +7,7 @@ description: "Use when the pull request for the current git worktree's branch ha
 
 Delete a git worktree whose branch has already been merged, bring the primary checkout back to an up-to-date `main`, and delete the local branch. This is local cleanup only — the remote branch is never touched.
 
-Every phase below has a **stop** condition. When one triggers, report it and take no further action; do not skip ahead or "fix it yourself" (e.g. never force-push, never `--force` a worktree removal, never escalate `branch -d` to `-D`).
+Every phase below has a **stop** condition. When one triggers, report it and take no further action; do not skip ahead or "fix it yourself" (e.g. never force-push or escalate `branch -d` to `-D`). The only permitted forced worktree removal is the one-time, explicitly approved submodule exception in step 3.
 
 ## 0. Establish context
 
@@ -29,12 +29,18 @@ Only proceed past this step when `state == MERGED`.
 
 Even with a merged PR confirmed, check the worktree itself hasn't drifted:
 
-- `git -C <worktree-path> status --porcelain` — if non-empty, **stop**, show the changes, and ask the user to commit, stash, or explicitly confirm discarding them.
+- `git -C <worktree-path> status --porcelain=v1 --untracked-files=all --ignore-submodules=none` - if non-empty, **stop**, show the changes, and ask the user to commit, stash, or explicitly confirm discarding them. If the check fails, **stop**. This also catches a changed submodule gitlink even when `.gitmodules` sets `ignore = all`.
 - Check for commits not on the remote/not part of the merged PR (`git -C <worktree-path> log @{u}.. --oneline`, or `git -C <worktree-path> cherry -v origin/<branch>` if there's no upstream). If any exist, **stop** and list them — a merged PR only vouches for what was actually pushed.
 
 ## 3. Remove the worktree
 
-Run `git -C <main-path> worktree remove <worktree-path>` — **from the primary checkout via `-C`, never from inside the worktree being removed**, and **never pass `--force`**. If removal fails because git detects changes on its own, surface that error rather than retrying with `--force`.
+Run `git -C <main-path> worktree remove <worktree-path>` - **from the primary checkout via `-C`, never from inside the worktree being removed**, and without `--force` initially. If it fails, **stop immediately** for every error except Git's specific submodule refusal (`working trees containing submodules cannot be moved or removed`). Do not treat other removal errors as permission to force removal.
+
+For that specific error only, after the merged-PR, clean-worktree, and unpushed-commit checks in steps 1-2 have passed:
+
+1. Check **every initialized submodule, including nested ones**, with `git -C <worktree-path> submodule foreach --recursive 'git status --porcelain=v1 --untracked-files=all --ignore-submodules=none'`. `foreach` prints each submodule path before its status. If any status output shows staged or unstaged changes or untracked files, or if the check itself fails, **stop** and report the paths and findings. Do not ignore untracked files or rely only on the superproject's status.
+2. Tell the user explicitly that `--force` will delete the worktree, **including its submodule checkouts and ignored build files**, and request approval for this one forced removal with `ask_user_question` (or the harness's equivalent structured approval tool if unavailable). If approval is not explicit, **stop**.
+3. Only on approval, retry **once** with `git -C <main-path> worktree remove --force <worktree-path>`. If that fails, **stop** and report the error. Never retry with a second `--force` or escalate to `branch -D`.
 
 If the worktree directory is already gone (not listed by `git worktree list`), skip this step and continue.
 
@@ -50,7 +56,7 @@ Fast-forward-only, not a plain `pull`: it deterministically brings `main` up to 
 
 ## 5. Delete the local branch
 
-`git -C <main-path> branch -d <branch>` — lowercase `-d`, never `-D`. This doubles as a second safety net: git itself will refuse if the branch isn't actually merged into the current `HEAD`. If it refuses, **stop** and surface the message verbatim; this can legitimately happen after a squash merge (different SHAs), in which case tell the user that's expected and ask explicitly before ever using `-D` on their behalf.
+`git -C <main-path> branch -d <branch>` — lowercase `-d`, never `-D`. This doubles as a second safety net: git itself will refuse if the branch isn't actually merged into the current `HEAD`. If it refuses, **stop** and surface the message verbatim; this can legitimately happen after a squash merge (different SHAs). Never escalate to `-D` in this workflow.
 
 ## 6. Hand back control
 
