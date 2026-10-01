@@ -72,12 +72,12 @@ Checked-in `config.toml` supplies a concrete `model` and `effort` for every agen
 An optional `$XDG_CONFIG_HOME/harness-kit/config.toml` (falling back to `~/.config/harness-kit/config.toml`) is a partial override over those defaults. It may contain only known agents, known harnesses, and non-empty single-line string `model` and `effort` values:
 
 ```toml
-[agents.debugger.pi]
-model = "openai-codex/gpt-5.6-sol"
+[agents.researcher.pi]
+model = "openai-codex/gpt-6-sol"
 effort = "high"
 
-[agents.debugger.codex]
-model = "gpt-5.6-sol"
+[agents.researcher.codex]
+model = "gpt-6-sol"
 effort = "high"
 ```
 
