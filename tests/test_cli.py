@@ -571,7 +571,7 @@ class HarnessKitTests(unittest.TestCase):
         data = tomllib.loads(generated.read_text())
         self.assertEqual(set(data), {"name", "description", "model", "model_reasoning_effort", "developer_instructions"})
         self.assertEqual(data["name"], "scout")
-        self.assertEqual(data["model"], "gpt-5.6-terra")
+        self.assertEqual(data["model"], "gpt-6-luna")
         self.assertEqual(data["model_reasoning_effort"], "medium")
         self.assertEqual(data["developer_instructions"], (self.project / "content/agents/scout/prompt.md").read_text())
         self.assertTrue((self.path / "home/codex-home/agents/scout.toml").is_symlink())
@@ -815,11 +815,11 @@ class HarnessKitTests(unittest.TestCase):
     def test_checked_in_policy_requires_complete_defaults(self) -> None:
         policy = self.project / "config.toml"
         original = policy.read_text()
-        policy.write_text(original.replace('codex.model = "gpt-5.6-terra"', 'codex.model = 42', 1))
+        policy.write_text(original.replace('[agents.builder.codex]\nmodel = "gpt-6-sol"', '[agents.builder.codex]\nmodel = 42', 1))
         result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents")
         self.assertEqual(result.returncode, 2)
         self.assertIn("model must be a non-empty single-line string", result.stderr)
-        policy.write_text(original.replace('codex.model = "gpt-5.6-terra"\ncodex.effort = "medium"\n', '', 1))
+        policy.write_text(original.replace('[agents.builder.codex]\nmodel = "gpt-6-sol"\neffort = "medium"\n', '', 1))
         result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "agents")
         self.assertEqual(result.returncode, 2)
         self.assertIn("missing defaults", result.stderr)
@@ -1268,7 +1268,7 @@ class HarnessKitTests(unittest.TestCase):
         result = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)
         rendered = (self.project / ".generated/pi/agents/builder.md").read_text()
-        self.assertIn('model: "openai-codex/gpt-5.6-terra"', rendered)
+        self.assertIn('model: "openai-codex/gpt-6-sol"', rendered)
 
     def test_machine_policy_partial_override_preserves_other_defaults(self) -> None:
         self.write_machine_policy('[agents.builder.pi]\neffort = "high"\n')
@@ -1276,9 +1276,9 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         pi = (self.project / ".generated/pi/agents/builder.md").read_text()
         claude = (self.project / ".generated/claude/agents/builder.md").read_text()
-        self.assertIn('model: "openai-codex/gpt-5.6-terra"\n', pi)
+        self.assertIn('model: "openai-codex/gpt-6-sol"\n', pi)
         self.assertIn('thinking: "high"\n', pi)
-        self.assertIn('model: "sonnet"\n', claude)
+        self.assertIn('model: "claude-opus-5-5"\n', claude)
         self.assertIn('effort: "medium"\n', claude)
 
     def test_machine_policy_rejects_unknown_agent(self) -> None:

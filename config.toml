@@ -1,39 +1,65 @@
-[agents.builder]
-claude.model = "sonnet"
-claude.effort = "medium"
-pi.model = "openai-codex/gpt-5.6-terra"
-pi.effort = "medium"
-codex.model = "gpt-5.6-terra"
-codex.effort = "medium"
+# Claude
 
-[agents.debugger]
-claude.model = "opus"
-claude.effort = "medium"
-pi.model = "openai-codex/gpt-5.6-sol"
-pi.effort = "medium"
-codex.model = "gpt-5.6-sol"
-codex.effort = "medium"
+[agents.builder.claude]
+model = "claude-opus-5-5"
+effort = "medium"
 
-[agents.refuter]
-claude.model = "opus"
-claude.effort = "medium"
-pi.model = "openai-codex/gpt-5.6-sol"
-pi.effort = "medium"
-codex.model = "gpt-5.6-sol"
-codex.effort = "medium"
+[agents.debugger.claude]
+model = "claude-opus-5-5"
+effort = "high"
 
-[agents.researcher]
-claude.model = "sonnet"
-claude.effort = "medium"
-pi.model = "openai-codex/gpt-5.6-terra"
-pi.effort = "medium"
-codex.model = "gpt-5.6-terra"
-codex.effort = "medium"
+[agents.refuter.claude]
+model = "claude-opus-5-5"
+effort = "high"
 
-[agents.scout]
-claude.model = "sonnet"
-claude.effort = "medium"
-pi.model = "openai-codex/gpt-5.6-terra"
-pi.effort = "medium"
-codex.model = "gpt-5.6-terra"
-codex.effort = "medium"
+[agents.researcher.claude]
+model = "claude-sonnet-5-5"
+effort = "medium"
+
+[agents.scout.claude]
+model = "claude-sonnet-5-5"
+effort = "medium"
+
+# Pi
+
+[agents.builder.pi]
+model = "openai-codex/gpt-6-sol"
+effort = "medium"
+
+[agents.debugger.pi]
+model = "openai-codex/gpt-6-sol"
+effort = "high"
+
+[agents.refuter.pi]
+model = "openai-codex/gpt-6-sol"
+effort = "high"
+
+[agents.researcher.pi]
+model = "openai-codex/gpt-6-luna"
+effort = "medium"
+
+[agents.scout.pi]
+model = "openai-codex/gpt-6-luna"
+effort = "medium"
+
+# Codex
+
+[agents.builder.codex]
+model = "gpt-6-sol"
+effort = "medium"
+
+[agents.debugger.codex]
+model = "gpt-6-sol"
+effort = "high"
+
+[agents.refuter.codex]
+model = "gpt-6-sol"
+effort = "high"
+
+[agents.researcher.codex]
+model = "gpt-6-luna"
+effort = "medium"
+
+[agents.scout.codex]
+model = "gpt-6-luna"
+effort = "medium"
