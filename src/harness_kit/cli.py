@@ -345,49 +345,102 @@ def shared_skill_links(user_home: Path) -> list[Link]:
     ]
 
 
-def yaml_boolean(value: str) -> bool | None:
-    """Read a plain YAML boolean scalar, ignoring quotes and trailing comments."""
-    value = value.split(" #", 1)[0].strip().strip("'\"").lower()
-    return {"true": True, "false": False}.get(value)
+BOM = "\ufeff"
+
+
+def canonical_boolean(rest: str, location: str) -> bool:
+    """Read the text after `key:` as an unquoted lowercase true or false.
+
+    Anything else (quoted, capitalised, yes/no, a trailing comment, no space
+    after the colon) is rejected rather than guessed at: harnesses disagree on
+    such values, e.g. Codex reads "false" as a string and Pi requires === true.
+    """
+    value = rest.rstrip()
+    if value == " true":
+        return True
+    if value == " false":
+        return False
+    raise KitError(f"{location} must be an unquoted lowercase true or false, got {rest.strip()!r}")
+
+
+def plain_key(line: str) -> str:
+    """Return a line's mapping key with surrounding whitespace and quotes removed."""
+    return line.partition(":")[0].strip().strip("'\"")
 
 
 def skill_is_user_invoked(skill_file: Path) -> bool:
-    """Return whether SKILL.md frontmatter sets disable-model-invocation: true."""
-    lines = skill_file.read_text().splitlines()
+    """Return whether SKILL.md frontmatter sets disable-model-invocation: true.
+
+    Canonical form: a leading UTF-8 BOM is stripped (as Pi does), the file
+    opens with a `---` line, and the frontmatter ends at the next `---` line.
+    disable-model-invocation, if present, appears once, as an unindented,
+    unquoted key written `disable-model-invocation: true` or `: false`.
+    Absent means model-invoked.
+    """
+    lines = skill_file.read_text().removeprefix(BOM).splitlines()
     if not lines or lines[0].strip() != "---":
         raise KitError(f"{skill_file}: missing frontmatter")
+    key = "disable-model-invocation"
+    found: bool | None = None
     for line in lines[1:]:
         if line.strip() == "---":
-            return False
-        key, separator, value = line.partition(":")
-        if separator and key == "disable-model-invocation":
-            parsed = yaml_boolean(value)
-            if parsed is None:
-                raise KitError(f"{skill_file}: disable-model-invocation must be true or false")
-            return parsed
+            return bool(found)
+        if plain_key(line) != key:
+            continue
+        if not line.startswith(f"{key}:"):
+            raise KitError(f"{skill_file}: {key} must be an unindented, unquoted top-level key")
+        if found is not None:
+            raise KitError(f"{skill_file}: duplicate {key}")
+        found = canonical_boolean(line[len(key) + 1:], f"{skill_file}: {key}")
     raise KitError(f"{skill_file}: unterminated frontmatter")
 
 
 def codex_implicit_invocation(openai_file: Path) -> bool | None:
     """Return policy.allow_implicit_invocation from agents/openai.yaml, if set.
 
-    A targeted read of the one key harness-kit checks, not a YAML parser:
-    the key must sit in an indented block under a top-level policy: line.
+    A targeted read of the one key harness-kit checks, not a YAML parser, so
+    it accepts only a canonical form: no tabs or BOM anywhere; at most one
+    top-level `policy:` line, written exactly so (no flow map or comment);
+    its first child indented by exactly two spaces; and
+    `allow_implicit_invocation: true` or `: false` at most once as a direct
+    child at that two-space indent, unquoted. Deeper occurrences belong to
+    nested mappings and do not count.
     """
-    in_policy = False
-    for line in openai_file.read_text().splitlines():
+    text = openai_file.read_text()
+    if text.startswith(BOM):
+        raise KitError(f"{openai_file}: must not start with a byte order mark")
+    if "\t" in text:
+        raise KitError(f"{openai_file}: must not contain tabs")
+    key = "allow_implicit_invocation"
+    seen_policy = in_policy = False
+    first_child = False
+    found: bool | None = None
+    for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         if not line[0].isspace():
-            in_policy = line.split(" #", 1)[0].rstrip() == "policy:"
+            in_policy = plain_key(line) == "policy"
+            if in_policy:
+                if line.rstrip() != "policy:":
+                    raise KitError(f"{openai_file}: policy must be written as a block mapping on its own `policy:` line, got {line.strip()!r}")
+                if seen_policy:
+                    raise KitError(f"{openai_file}: duplicate policy")
+                seen_policy = first_child = True
             continue
-        key, separator, value = line.strip().partition(":")
-        if in_policy and separator and key == "allow_implicit_invocation":
-            parsed = yaml_boolean(value)
-            if parsed is None:
-                raise KitError(f"{openai_file}: policy.allow_implicit_invocation must be true or false")
-            return parsed
-    return None
+        if not in_policy:
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent < 2 or (first_child and indent != 2):
+            raise KitError(f"{openai_file}: policy entries must be indented by exactly two spaces")
+        first_child = False
+        if indent != 2 or plain_key(line) != key:
+            continue
+        if not line.startswith(f"  {key}:"):
+            raise KitError(f"{openai_file}: policy.{key} must be an unquoted key")
+        if found is not None:
+            raise KitError(f"{openai_file}: duplicate policy.{key}")
+        found = canonical_boolean(line[len(key) + 3:], f"{openai_file}: policy.{key}")
+    return found
 
 
 def validate_skill_invocation() -> None:
@@ -396,6 +449,8 @@ def validate_skill_invocation() -> None:
     Codex ignores disable-model-invocation and reads
     policy.allow_implicit_invocation instead, so a user-invoked skill must
     ship the file with it set to false, and a model-invoked one must not.
+    Problems across all skills, including files not in canonical form, are
+    reported together.
     """
     problems: list[str] = []
     for skill in sorted((ROOT / "content/skills").iterdir()):
@@ -403,8 +458,13 @@ def validate_skill_invocation() -> None:
         if not skill.is_dir() or not skill_file.is_file():
             continue
         openai_file = skill / "agents/openai.yaml"
-        implicit = codex_implicit_invocation(openai_file) if openai_file.is_file() else None
-        if skill_is_user_invoked(skill_file):
+        try:
+            implicit = codex_implicit_invocation(openai_file) if openai_file.is_file() else None
+            user_invoked = skill_is_user_invoked(skill_file)
+        except KitError as error:
+            problems.append(f"{skill.name}: {error}")
+            continue
+        if user_invoked:
             if not openai_file.is_file():
                 problems.append(f"{skill.name}: user-invoked skill is missing agents/openai.yaml")
             elif implicit is not False:
@@ -412,7 +472,7 @@ def validate_skill_invocation() -> None:
         elif implicit is False:
             problems.append(f"{skill.name}: model-invoked skill sets policy.allow_implicit_invocation: false in agents/openai.yaml")
     if problems:
-        raise KitError("skill invocation mismatch:\n  " + "\n  ".join(problems))
+        raise KitError("invalid skill invocation declarations:\n  " + "\n  ".join(problems))
 
 
 def desired_links(harness: str, agents: list[Agent], components: frozenset[str]) -> list[Link]:

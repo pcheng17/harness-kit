@@ -1342,7 +1342,7 @@ class HarnessKitTests(unittest.TestCase):
 
     def test_check_accepts_matching_skill_invocation_declarations(self) -> None:
         result = self.check_skills()
-        self.assertNotIn("skill invocation mismatch", result.stderr)
+        self.assertNotIn("invalid skill invocation declarations", result.stderr)
         self.assertEqual(result.returncode, 1, result.stderr)  # valid but not converged
 
     def test_check_rejects_user_invoked_skill_without_openai_yaml(self) -> None:
@@ -1375,7 +1375,7 @@ class HarnessKitTests(unittest.TestCase):
         openai_yaml.parent.mkdir()
         openai_yaml.write_text('interface:\n  display_name: "TDD"\npolicy:\n  allow_implicit_invocation: true\n')
         result = self.check_skills()
-        self.assertNotIn("skill invocation mismatch", result.stderr)
+        self.assertNotIn("invalid skill invocation declarations", result.stderr)
         self.assertEqual(result.returncode, 1, result.stderr)
 
     def test_check_rejects_skill_whose_frontmatter_drops_model_invocation_flag(self) -> None:
@@ -1384,6 +1384,126 @@ class HarnessKitTests(unittest.TestCase):
         result = self.check_skills()
         self.assertEqual(result.returncode, 2)
         self.assertIn("triage: model-invoked skill sets policy.allow_implicit_invocation: false", result.stderr)
+
+    def assert_skills_rejected(self, *messages: str) -> None:
+        result = self.check_skills()
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("invalid skill invocation declarations", result.stderr)
+        for message in messages:
+            self.assertIn(message, result.stderr)
+
+    def write_triage_openai_yaml(self, policy: str) -> None:
+        (self.project / "content/skills/triage/agents/openai.yaml").write_text('interface:\n  display_name: "Triage"\n' + policy)
+
+    def test_check_rejects_quoted_openai_yaml_booleans(self) -> None:
+        for value in ('"false"', "'false'"):
+            with self.subTest(value=value):
+                self.write_triage_openai_yaml(f"policy:\n  allow_implicit_invocation: {value}\n")
+                self.assert_skills_rejected(f"policy.allow_implicit_invocation must be an unquoted lowercase true or false, got {value!r}")
+
+    def test_check_rejects_non_canonical_openai_yaml_booleans(self) -> None:
+        for value in ("False", "FALSE", "no", "off", "0", "", "false # comment", "~"):
+            with self.subTest(value=value):
+                self.write_triage_openai_yaml(f"policy:\n  allow_implicit_invocation: {value}\n")
+                self.assert_skills_rejected("policy.allow_implicit_invocation must be an unquoted lowercase true or false")
+        self.write_triage_openai_yaml("policy:\n  allow_implicit_invocation:false\n")
+        self.assert_skills_rejected("policy.allow_implicit_invocation must be an unquoted lowercase true or false")
+
+    def test_check_rejects_quoted_frontmatter_boolean(self) -> None:
+        skill = self.project / "content/skills/triage/SKILL.md"
+        original = skill.read_text()
+        for value in ('"true"', "'true'", "True", "yes"):
+            with self.subTest(value=value):
+                skill.write_text(original.replace("disable-model-invocation: true", f"disable-model-invocation: {value}", 1))
+                self.assert_skills_rejected(f"disable-model-invocation must be an unquoted lowercase true or false, got {value!r}")
+
+    def test_check_ignores_nested_allow_implicit_invocation(self) -> None:
+        self.write_triage_openai_yaml("policy:\n  other:\n    allow_implicit_invocation: false\n")
+        self.assert_skills_rejected("triage: user-invoked skill must set policy.allow_implicit_invocation: false")
+        self.write_triage_openai_yaml("interface:\n  allow_implicit_invocation: false\n")
+        self.assert_skills_rejected("triage: user-invoked skill must set policy.allow_implicit_invocation: false")
+
+    def test_check_accepts_nested_mapping_beside_allow_implicit_invocation(self) -> None:
+        self.write_triage_openai_yaml("policy:\n  other:\n    allow_implicit_invocation: true\n  allow_implicit_invocation: false\n")
+        result = self.check_skills()
+        self.assertNotIn("invalid skill invocation declarations", result.stderr)
+        self.assertEqual(result.returncode, 1, result.stderr)
+
+    def test_check_rejects_tabs_in_openai_yaml(self) -> None:
+        self.write_triage_openai_yaml("policy:\n\tallow_implicit_invocation: false\n")
+        self.assert_skills_rejected("agents/openai.yaml: must not contain tabs")
+
+    def test_check_rejects_non_two_space_policy_indentation(self) -> None:
+        for policy in ("policy:\n    allow_implicit_invocation: false\n", "policy:\n allow_implicit_invocation: false\n", "policy:\n  other: 1\n allow_implicit_invocation: false\n"):
+            with self.subTest(policy=policy):
+                self.write_triage_openai_yaml(policy)
+                self.assert_skills_rejected("policy entries must be indented by exactly two spaces")
+
+    def test_check_rejects_duplicate_allow_implicit_invocation(self) -> None:
+        self.write_triage_openai_yaml("policy:\n  allow_implicit_invocation: false\n  allow_implicit_invocation: true\n")
+        self.assert_skills_rejected("duplicate policy.allow_implicit_invocation")
+
+    def test_check_rejects_duplicate_policy_blocks(self) -> None:
+        self.write_triage_openai_yaml("policy:\n  allow_implicit_invocation: false\npolicy:\n  other: 1\n")
+        self.assert_skills_rejected("duplicate policy")
+
+    def test_check_rejects_quoted_allow_implicit_invocation_key(self) -> None:
+        self.write_triage_openai_yaml('policy:\n  "allow_implicit_invocation": false\n')
+        self.assert_skills_rejected("policy.allow_implicit_invocation must be an unquoted key")
+
+    def test_check_rejects_flow_map_policy(self) -> None:
+        for line in ("policy: {allow_implicit_invocation: false}", "policy: # comment", '"policy":'):
+            with self.subTest(line=line):
+                self.write_triage_openai_yaml(line + "\n")
+                self.assert_skills_rejected("policy must be written as a block mapping on its own `policy:` line")
+
+    def test_check_rejects_openai_yaml_byte_order_mark(self) -> None:
+        openai_yaml = self.project / "content/skills/triage/agents/openai.yaml"
+        openai_yaml.write_text("\ufeff" + openai_yaml.read_text())
+        self.assert_skills_rejected("agents/openai.yaml: must not start with a byte order mark")
+
+    def test_check_strips_skill_byte_order_mark(self) -> None:
+        skill = self.project / "content/skills/triage/SKILL.md"
+        skill.write_text("\ufeff" + skill.read_text())
+        result = self.check_skills()
+        self.assertNotIn("invalid skill invocation declarations", result.stderr)
+        self.assertEqual(result.returncode, 1, result.stderr)
+
+    def test_check_rejects_missing_and_unterminated_frontmatter(self) -> None:
+        skill = self.project / "content/skills/triage/SKILL.md"
+        original = skill.read_text()
+        skill.write_text("# Triage\n")
+        self.assert_skills_rejected("SKILL.md: missing frontmatter")
+        skill.write_text("")
+        self.assert_skills_rejected("SKILL.md: missing frontmatter")
+        skill.write_text(original.split("---\n", 2)[0] + "---\n" + original.split("---\n", 2)[1])
+        self.assert_skills_rejected("SKILL.md: unterminated frontmatter")
+
+    def test_check_rejects_indented_and_duplicate_frontmatter_flag(self) -> None:
+        skill = self.project / "content/skills/triage/SKILL.md"
+        original = skill.read_text()
+        skill.write_text(original.replace("disable-model-invocation: true", "  disable-model-invocation: true", 1))
+        self.assert_skills_rejected("disable-model-invocation must be an unindented, unquoted top-level key")
+        skill.write_text(original.replace("disable-model-invocation: true", "disable-model-invocation: true\ndisable-model-invocation: false", 1))
+        self.assert_skills_rejected("duplicate disable-model-invocation")
+
+    def test_check_reports_every_bad_skill_together(self) -> None:
+        self.write_triage_openai_yaml('policy:\n  allow_implicit_invocation: "false"\n')
+        (self.project / "content/skills/to-spec/agents/openai.yaml").unlink()
+        tdd_yaml = self.project / "content/skills/tdd/agents/openai.yaml"
+        tdd_yaml.parent.mkdir()
+        tdd_yaml.write_text("policy:\n  allow_implicit_invocation: false\n")
+        self.assert_skills_rejected(
+            "triage: ",
+            "to-spec: user-invoked skill is missing agents/openai.yaml",
+            "tdd: model-invoked skill sets policy.allow_implicit_invocation: false",
+        )
+
+    def test_check_skips_invocation_validation_without_skills_component(self) -> None:
+        self.write_triage_openai_yaml('policy:\n  allow_implicit_invocation: "false"\n')
+        result = invoke(self.sandbox, "check", "--component", "agents")
+        self.assertNotIn("invalid skill invocation declarations", result.stderr)
+        self.assertNotEqual(result.returncode, 2, result.stderr)
 
     def test_install_does_not_create_machine_policy(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "agents")
