@@ -13,7 +13,7 @@ Specs and tickets for this repo live as GitHub issues. Use the `gh` CLI for all 
 - **Blocking links**: `gh issue create ... --blocked-by <n>,<n>` sets native "blocked by" links at creation; `gh issue edit <number> --add-blocked-by <n>` / `--remove-blocked-by <n>` change them later. Both take issue numbers, so no `gh api` call or issue ID lookup is needed. Sub-issues use `--parent <n>` (create) or `--add-sub-issue <n>` (edit).
 - **Read blocking links**: `gh api repos/{owner}/{repo}/issues/<number>/dependencies/blocked_by --jq '[.[].number]'`
 
-Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
+Infer the repo from `git remote -v` - `gh` does this automatically when run inside a clone.
 
 ## Pull requests as a triage surface
 
@@ -25,7 +25,7 @@ When set to `yes`, PRs run through the same labels and states as issues, using t
 - **List external PRs for triage**: `gh pr list --state open --json number,title,body,labels,author,authorAssociation,comments` then keep only `authorAssociation` of `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`, or `NONE` (drop `OWNER`/`MEMBER`/`COLLABORATOR`).
 - **Comment / label / close**: `gh pr comment`, `gh pr edit --add-label`/`--remove-label`, `gh pr close`.
 
-GitHub shares one number space across issues and PRs, so a bare `#42` may be either — resolve with `gh pr view 42` and fall back to `gh issue view 42`.
+GitHub shares one number space across issues and PRs, so a bare `#42` may be either - resolve with `gh pr view 42` and fall back to `gh issue view 42`.
 
 ## When a skill says "publish to the issue tracker"
 

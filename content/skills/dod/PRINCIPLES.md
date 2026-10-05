@@ -1,8 +1,8 @@
-# Data-Oriented Design — Principles from the Talk
+# Data-Oriented Design - Principles from the Talk
 
 Distilled notes on Mike Acton's CppCon 2014 keynote "Data-Oriented Design and C++"
 ([youtu.be/rX0ItVEVjHc](https://youtu.be/rX0ItVEVjHc)). Acton was engine director at
-Insomniac Games (Ratchet & Clank, Sunset Overdrive) — hard ship dates, soft-realtime
+Insomniac Games (Ratchet & Clank, Sunset Overdrive) - hard ship dates, soft-realtime
 frames of 16/33 ms, budgets reasoned about in microseconds. These are paraphrased
 notes, not a transcript.
 
@@ -16,19 +16,19 @@ notes, not a transcript.
   simpler than it actually is.
 - If you can't reason about the cost of solving a problem, you don't understand it.
   If you don't understand the hardware, you can't reason about the cost.
-- Everything is a data problem — including usability, maintenance, and debuggability.
+- Everything is a data problem - including usability, maintenance, and debuggability.
 - Solving problems you probably don't have creates problems you definitely do.
   ("Future-proofing" is a trap: no code survives every imaginable future platform.)
 - Rules of thumb: where there's one, there are many (look along the time axis);
-  solve the most common case first, not the most generic; keep context — the more
+  solve the most common case first, not the most generic; keep context - the more
   constraints you keep, the better the solution can be.
-- Software is real engineering on real hardware solving a real problem — it does not
+- Software is real engineering on real hardware solving a real problem - it does not
   run in a "magic fairy ether."
 
 ## The three big lies (of mainstream C++/OO culture)
 
 1. **"Software is a platform."** Hardware is the platform. Different hardware demands
-   different solutions; reality isn't a hack you're forced to tolerate — reality *is*
+   different solutions; reality isn't a hack you're forced to tolerate - reality *is*
    the problem.
 2. **"Code should model the world."** World-modeling conflates two different things:
    maintenance of data access (fine) and understanding of the data's properties
@@ -37,11 +37,11 @@ notes, not a transcript.
    their data is transformed. World modeling is "engineering by analogy" and leads
    to monolithic structures gluing together unrelated transforms.
 3. **"Code is more important than data."** The programmer's job is not writing code;
-   code is the tool. The job is transforming data — correctly, quickly, maintainably.
+   code is the tool. The job is transforming data - correctly, quickly, maintainably.
    Only write code with direct, provable value for the transform at hand.
 
 Symptoms these lies cause: poor performance, poor concurrency, poor optimizability,
-poor stability, poor testability — then layers of infrastructure to fight the
+poor stability, poor testability - then layers of infrastructure to fight the
 self-inflicted problems.
 
 ## The cost model
@@ -59,8 +59,8 @@ Latency reference points (order-of-magnitude, x64-class):
 
 The punchline: one RAM access outweighs the "scary" math by an order of magnitude.
 In a typical scalar member-function update, L2 misses vs. actual work is roughly
-10:1 — **the compiler can only reason about that ~10%** (instruction selection,
-registers). The other ~90% — memory layout and access order — is the programmer's
+10:1 - **the compiler can only reason about that ~10%** (instruction selection,
+registers). The other ~90% - memory layout and access order - is the programmer's
 job. The compiler is a tool, not a magic wand, and even trivially foldable code
 (a bool test in a loop calling a helper) routinely defeats real compilers unless
 you hoist invariant reads yourself.
@@ -81,12 +81,12 @@ A monolithic game object (position, velocity, name, model pointer, misc fields)
 updated one at a time wastes ~56–60 of every 64-byte line. Restructure: an input
 struct of just the fields read (velocity + factor), an output array of just the
 field written, processed 32 at a time → 6 input lines + 2 output lines, 100%
-utilized, streaming prefetch kicks in, ~10× speedup — *just from using the line at
+utilized, streaming prefetch kicks in, ~10× speedup - *just from using the line at
 all*. Bonus: the cost of future changes becomes reasonable to estimate.
 
 ### Bools in structs
 
-A bool stores one bit in a byte — low information density — and worse, pushes hot
+A bool stores one bit in a byte - low information density - and worse, pushes hot
 fields onto a second cache line: ~200 extra cycles to read one bit. Bools are also
 "last-minute decision making": a per-element branch the caller usually could have
 decided once. Measure information density cheaply: print the value stream over many
@@ -103,13 +103,13 @@ variables ⇒ unmanaged reads, ABI-frozen layout, unavoidable dead bytes per lin
 seven bools ⇒ ~128 implicit states to reason about in every method; the name
 `Node` ⇒ over-generalized, designed one-at-a-time when the common case is a whole
 hierarchy; virtual updates ⇒ unmanaged icache; name strings generated in a default
-constructor ⇒ work done just to be overwritten (do it offline — hash strings,
+constructor ⇒ work done just to be overwritten (do it offline - hash strings,
 precompute; the best code is code that doesn't need to exist).
 
 The refactor pattern: separate states into separate functions taking *lists*
 (translate-local(list), translate-world(list), translate-parent-relative(list));
 triage by measured call probability × count; split again (roots vs. nodes with
-parents — the caller knows which is which); precondition the data into a packed
+parents - the caller knows which is which); precondition the data into a packed
 stream for the dominant case; check work-per-line against ~200 cycles/line before
 deciding whether deeper optimization is worth it. Apply recursively.
 
@@ -118,7 +118,7 @@ deciding whether deeper optimization is worth it. Apply recursively.
 - **"I need templates to avoid duplication."** The duplication is usually smaller
   than feared, and codegen (a template is a poor man's text processor) covers the
   real cases.
-- **"I target many platforms — I can't know cache sizes."** You target a *finite
+- **"I target many platforms - I can't know cache sizes."** You target a *finite
   range* of platforms. Know the min, max, and common case of the range; general
   portability across all imaginable hardware is a fool's errand.
 - **"Doesn't this hurt maintainability?"** The opposite: separated states mean fewer
@@ -130,10 +130,10 @@ deciding whether deeper optimization is worth it. Apply recursively.
   outward. Don't try to do it everywhere at once.
 - **"My constraint is developer time, not CPU time."** Acton's answer: performance
   matters to users in every domain (his mindset wouldn't change in business
-  software), and the discipline is the same — spend effort where it's actually
+  software), and the discipline is the same - spend effort where it's actually
   valuable, which you only know by understanding the real constraints.
 
 Insomniac's own house rules, for context: no exceptions, no RTTI, no STL, no
 multiple inheritance, frowned-on templates and operator overloading, all memory
-allocated up front into per-system sandboxes with custom allocators — every feature
+allocated up front into per-system sandboxes with custom allocators - every feature
 evaluated on whether it helps solve the actual problem on the actual hardware.
