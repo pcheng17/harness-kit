@@ -1,6 +1,6 @@
 # Issue tracker: Linear
 
-Issues and PRDs for this repo live as Linear issues.
+Specs and tickets for this repo live as Linear issues.
 
 ## MCP only — no CLI
 

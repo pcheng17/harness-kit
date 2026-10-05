@@ -1,10 +1,10 @@
 ---
 name: implement
-description: "Implement a piece of work based on a PRD or set of issues."
+description: "Implement a piece of work based on a spec or set of tickets."
 disable-model-invocation: true
 ---
 
-Implement the work described by the user in the PRD or issues.
+Implement the work described by the user in the spec or tickets.
 
 Unless the user explicitly specifies otherwise, all implementation, documentation, testing, and other repository work must be done in a separate git worktree created from `main`. Do not make task changes directly in the primary checkout.
 
