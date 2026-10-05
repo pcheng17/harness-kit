@@ -4,7 +4,7 @@ Examples below span C++ simulation code and full-stack (TS/JS) code, since both 
 
 ## C++ / physics engine examples
 
-**Bad — tautological.** Recomputes the same formula the code uses; can never catch a wrong formula.
+**Bad - tautological.** Recomputes the same formula the code uses; can never catch a wrong formula.
 
 ```cpp
 TEST_CASE("integrator advances velocity") {
@@ -15,7 +15,7 @@ TEST_CASE("integrator advances velocity") {
 }
 ```
 
-**Good — expected value from an independent source (analytical solution / worked example).**
+**Good - expected value from an independent source (analytical solution / worked example).**
 
 ```cpp
 TEST_CASE("free-falling body matches closed-form projectile motion after 1s") {
@@ -25,12 +25,12 @@ TEST_CASE("free-falling body matches closed-form projectile motion after 1s") {
 
     sim.step(/*dt=*/1.0); // gravity = -9.8 m/s^2
 
-    // y(t) = y0 - 0.5*g*t^2 — worked out independently, not derived from the integrator
+    // y(t) = y0 - 0.5*g*t^2, worked out independently, not derived from the integrator
     REQUIRE(sim.bodies()[0].position.y == Approx(100 - 0.5 * 9.8 * 1.0 * 1.0).margin(1e-6));
 }
 ```
 
-**Good — invariant-based, when there's no simple closed form.** Conservation laws are a source of truth the implementation doesn't get to define.
+**Good - invariant-based, when there's no simple closed form.** Conservation laws are a source of truth the implementation doesn't get to define.
 
 ```cpp
 TEST_CASE("elastic collision conserves total kinetic energy") {
@@ -43,17 +43,17 @@ TEST_CASE("elastic collision conserves total kinetic energy") {
 }
 ```
 
-Test at the `Simulation`/`RigidBody` public API (the seam), not by reaching into the broad-phase grid or the solver's internal Jacobians — those are implementation details that should be free to change (switching solvers, spatial partitioning schemes) without breaking the test.
+Test at the `Simulation`/`RigidBody` public API (the seam), not by reaching into the broad-phase grid or the solver's internal Jacobians - those are implementation details that should be free to change (switching solvers, spatial partitioning schemes) without breaking the test.
 
 ### Floating point
 
 - Never use `==` on floats/doubles. Use an epsilon comparison (`Approx(...).margin(...)` in Catch2, `EXPECT_NEAR` in GoogleTest).
-- Pick the margin from the physics, not from "whatever makes it pass" — e.g. margin proportional to the energy scale of the system, or a few ULPs for a value that should be exact.
-- If the engine must be bit-reproducible across runs/platforms, that's its own explicit test (fixed-seed replay, cross-platform hash comparison) — don't conflate it with correctness tests.
+- Pick the margin from the physics, not from "whatever makes it pass" - e.g. margin proportional to the energy scale of the system, or a few ULPs for a value that should be exact.
+- If the engine must be bit-reproducible across runs/platforms, that's its own explicit test (fixed-seed replay, cross-platform hash comparison) - don't conflate it with correctness tests.
 
 ## Full-stack (TS/JS) examples
 
-**Bad — implementation-coupled.** Verifies through a side channel (the DB) instead of the interface under test.
+**Bad - implementation-coupled.** Verifies through a side channel (the DB) instead of the interface under test.
 
 ```ts
 test("checkout creates an order", async () => {
@@ -63,7 +63,7 @@ test("checkout creates an order", async () => {
 });
 ```
 
-**Good — asserts through the public interface, with an expected value from the spec/fixture, not recomputed.**
+**Good - asserts through the public interface, with an expected value from the spec/fixture, not recomputed.**
 
 ```ts
 test("checkout with a valid cart returns a confirmed order", async () => {
@@ -79,5 +79,5 @@ Test at the HTTP/service boundary a real caller uses. Reserve DB assertions for 
 
 ## Where these live
 
-- C++ engine/simulation tests: alongside the module under test, using the project's existing framework (Catch2/GoogleTest) — check for a `tests/` or `*_test.cpp` convention before adding a new one.
+- C++ engine/simulation tests: alongside the module under test, using the project's existing framework (Catch2/GoogleTest) - check for a `tests/` or `*_test.cpp` convention before adding a new one.
 - Full-stack tests: colocate unit tests with source; integration/API tests typically live in a top-level `integration/` or `e2e/` directory hitting a real (or containerized) backend, not a mocked one.

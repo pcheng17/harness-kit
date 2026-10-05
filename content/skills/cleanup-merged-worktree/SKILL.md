@@ -1,19 +1,19 @@
 ---
 name: cleanup-merged-worktree
-description: "Use when the pull request for the current git worktree's branch has been merged and the user wants it cleaned up — deletes the worktree, switches the primary checkout back to main, updates main, and deletes the now-merged local branch. Local cleanup only; never touches the remote branch."
+description: "Use when the pull request for the current git worktree's branch has been merged and the user wants it cleaned up - deletes the worktree, switches the primary checkout back to main, updates main, and deletes the now-merged local branch. Local cleanup only; never touches the remote branch."
 ---
 
 # Cleanup Merged Worktree
 
-Delete a git worktree whose branch has already been merged, bring the primary checkout back to an up-to-date `main`, and delete the local branch. This is local cleanup only — the remote branch is never touched.
+Delete a git worktree whose branch has already been merged, bring the primary checkout back to an up-to-date `main`, and delete the local branch. This is local cleanup only - the remote branch is never touched.
 
 Every phase below has a **stop** condition. When one triggers, report it and take no further action; do not skip ahead or "fix it yourself" (e.g. never force-push or escalate `branch -d` to `-D`). The only permitted forced worktree removal is the one-time, explicitly approved submodule exception in step 3.
 
 ## 0. Establish context
 
 - Determine the branch to clean up: use the one the user named, otherwise `git branch --show-current` run from the worktree.
-- **Stop** if that's `main`, empty, or detached — ask the user which worktree/branch they mean.
-- Find the primary checkout with `git worktree list --porcelain` (the first `worktree <path>` entry is always the primary checkout; call it `$MAIN_PATH`). **Stop** if the worktree being cleaned up is itself `$MAIN_PATH` — this skill only removes linked worktrees, not the primary checkout.
+- **Stop** if that's `main`, empty, or detached - ask the user which worktree/branch they mean.
+- Find the primary checkout with `git worktree list --porcelain` (the first `worktree <path>` entry is always the primary checkout; call it `$MAIN_PATH`). **Stop** if the worktree being cleaned up is itself `$MAIN_PATH` - this skill only removes linked worktrees, not the primary checkout.
 
 ## 1. Verify the PR was actually merged
 
@@ -30,7 +30,7 @@ Only proceed past this step when `state == MERGED`.
 Even with a merged PR confirmed, check the worktree itself hasn't drifted:
 
 - `git -C <worktree-path> status --porcelain=v1 --untracked-files=all --ignore-submodules=none` - if non-empty, **stop**, show the changes, and ask the user to commit, stash, or explicitly confirm discarding them. If the check fails, **stop**. This also catches a changed submodule gitlink even when `.gitmodules` sets `ignore = all`.
-- Check for commits not on the remote/not part of the merged PR (`git -C <worktree-path> log @{u}.. --oneline`, or `git -C <worktree-path> cherry -v origin/<branch>` if there's no upstream). If any exist, **stop** and list them — a merged PR only vouches for what was actually pushed.
+- Check for commits not on the remote/not part of the merged PR (`git -C <worktree-path> log @{u}.. --oneline`, or `git -C <worktree-path> cherry -v origin/<branch>` if there's no upstream). If any exist, **stop** and list them - a merged PR only vouches for what was actually pushed.
 
 ## 3. Remove the worktree
 
@@ -52,11 +52,11 @@ git -C <main-path> fetch origin main
 git -C <main-path> merge --ff-only origin/main
 ```
 
-Fast-forward-only, not a plain `pull`: it deterministically brings `main` up to the merged remote state regardless of the user's local `pull.rebase`/`pull.ff` config, and never creates an unwanted merge commit. If the `merge --ff-only` fails because local `main` has diverged, **stop**, show `git -C <main-path> log main..origin/main --oneline` and `git -C <main-path> log origin/main..main --oneline`, and leave `main` untouched — never rebase or force-reset it unasked.
+Fast-forward-only, not a plain `pull`: it deterministically brings `main` up to the merged remote state regardless of the user's local `pull.rebase`/`pull.ff` config, and never creates an unwanted merge commit. If the `merge --ff-only` fails because local `main` has diverged, **stop**, show `git -C <main-path> log main..origin/main --oneline` and `git -C <main-path> log origin/main..main --oneline`, and leave `main` untouched - never rebase or force-reset it unasked.
 
 ## 5. Delete the local branch
 
-`git -C <main-path> branch -d <branch>` — lowercase `-d`, never `-D`. This doubles as a second safety net: git itself will refuse if the branch isn't actually merged into the current `HEAD`. If it refuses, **stop** and surface the message verbatim; this can legitimately happen after a squash merge (different SHAs). Never escalate to `-D` in this workflow.
+`git -C <main-path> branch -d <branch>` - lowercase `-d`, never `-D`. This doubles as a second safety net: git itself will refuse if the branch isn't actually merged into the current `HEAD`. If it refuses, **stop** and surface the message verbatim; this can legitimately happen after a squash merge (different SHAs). Never escalate to `-D` in this workflow.
 
 ## 6. Hand back control
 
@@ -74,7 +74,7 @@ Cleaned up `<branch>`:
 - Branch deleted: <branch>
 
 Remote branch left untouched.
-cd into `<main-path>` to continue — this session's old directory no longer exists.
+cd into `<main-path>` to continue - this session's old directory no longer exists.
 ```
 
-If any step stopped early, report only that step's stop message — never a summary implying more happened than actually did.
+If any step stopped early, report only that step's stop message - never a summary implying more happened than actually did.
