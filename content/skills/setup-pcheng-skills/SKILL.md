@@ -25,17 +25,19 @@ Look at the current repo to understand its starting state. Read whatever exists;
 - `GLOSSARY.md` and `GLOSSARY-MAP.md` at the repo root
 - `docs/adr/` and any `src/*/docs/adr/` directories
 - `docs/agents/` - does this skill's prior output already exist?
-- `.scratch/` - sign that a local-markdown issue tracker convention is already in use
+- `.scratch/` - a sign that a local-markdown issue tracker convention is already in use
+- Is the `triage` skill installed? (a `triage` skill folder alongside this one, or `triage` in your available skills.) This decides whether Section B runs at all.
+- Monorepo signals - a `pnpm-workspace.yaml`, a `workspaces` field in `package.json`, or a populated `packages/*` with its own `src/`. These are present only in a genuinely large multi-package repo; their absence means single-context, which is almost every repo.
 
 ### 2. Present findings and ask
 
-Summarise what's present and what's missing. Then walk the user through the three decisions **one at a time** - present a section, get the user's answer, then move to the next. Don't dump all three at once.
+Summarise what's present and what's missing. Then take the sections in order. One section, one answer, then the next.
 
-Assume the user does not know what these terms mean. Each section starts with a short explainer (what it is, why these skills need it, what changes if they pick differently). Then show the choices and the default.
+Lead each section with the recommended answer so the user can accept it in a word. Give a one-line explainer only when the choice genuinely branches; skip the section entirely when exploration already settled it (Section B when `triage` isn't installed, Section C when there's no monorepo).
 
 **Section A - Issue tracker.**
 
-> Explainer: The "issue tracker" is where issues live for this repo. Skills like `to-tickets`, `triage`, and `to-spec` read from and write to it - they need to know whether to call `gh issue create`, write a markdown file under `.scratch/`, or follow some other workflow you describe. Pick the place you actually track work for this repo.
+> Explainer: The "issue tracker" is where issues live for this repo. Skills like `to-tickets`, `triage`, and `to-spec` read from and write to it. They need to know whether to call `gh issue create`, write a markdown file under `.scratch/`, or follow some other workflow you describe. Pick the place you actually track work for this repo.
 
 Default posture: these skills were designed for GitHub. If a `git remote` points at GitHub, propose that. If a `git remote` points at GitLab (`gitlab.com` or a self-hosted host), propose GitLab. Otherwise (or if the user prefers), offer:
 
@@ -45,47 +47,32 @@ Default posture: these skills were designed for GitHub. If a `git remote` points
 - **Local markdown** - specs and tickets live as files under `.scratch/<feature>/` in this repo (good for solo projects or repos without a remote)
 - **Other** (Jira, etc.) - ask the user to describe the workflow in one paragraph; the skill will record it as freeform prose
 
-If, and only if, the user picked **GitHub** or **GitLab**, ask one follow-up:
-
-> Explainer: Open-source repos often receive feature requests as pull requests, not just issues - a PR is an issue with attached code. If you turn this on, `/triage` pulls *external* PRs into the same queue and runs them through the same labels and states as issues (collaborators' in-flight PRs are left alone). Leave it off if PRs aren't a request surface for you.
-
-- **PRs as a request surface** - yes / no (default: no). Record the answer in `docs/agents/issue-tracker.md`. For local-markdown, Linear, and other trackers, skip this question - there are no PRs (Linear can still pair with a separate GitHub/GitLab PR surface - see [issue-tracker-linear.md](./issue-tracker-linear.md)).
+Record the choice in `docs/agents/issue-tracker.md`. The GitHub and GitLab templates carry a "PRs as a request surface" flag, defaulted **off**. Leave it off and don't raise it: a user who wants external PRs in the triage queue can flip the flag in the file later.
 
 If, and only if, the user picked **Linear**, ask one follow-up:
 
-> Explainer: Linear issues live under a specific **team** within your workspace (and sometimes a project within that team), not just "the workspace" as a whole. The skills need to know which team to create and search issues in - otherwise they don't know where to look or where to file new work.
+> Explainer: Linear issues live under a specific **team** within your workspace (and sometimes a project within that team), not just "the workspace" as a whole. The skills need to know which team to create and search issues in.
 
 - **Which Linear team** - ask the user, or authenticate the Linear MCP server first (if not already) and list teams via its tools so the user can pick from real options instead of typing a name from memory. Record the team (and project, if the user scopes to one) in `docs/agents/issue-tracker.md`.
 
-**Section B - Triage label vocabulary.**
+**Section B - Triage label vocabulary.** Skip this section entirely if the `triage` skill isn't installed (exploration told you), since an uninstalled skill needs no labels.
 
-> Explainer: When the `triage` skill processes an incoming issue, it moves it through a state machine - needs evaluation, waiting on reporter, ready for an AFK agent to pick up, ready for a human, or won't fix. To do that, it needs to apply labels (or the equivalent in your issue tracker) that match strings *you've actually configured*. If your repo already uses different label names (e.g. `bug:triage` instead of `needs-triage`), map them here so the skill applies the right ones instead of creating duplicates.
+If it is installed, ask exactly one question:
 
-The five canonical roles:
+> Do you want to keep the default triage labels? (recommended: **yes**)
 
-- `needs-triage` - maintainer needs to evaluate
-- `needs-info` - waiting on reporter
-- `ready-for-agent` - fully specified, AFK-ready (an agent can pick it up with no human context)
-- `ready-for-human` - needs human implementation
-- `wontfix` - will not be actioned
+The defaults are the five canonical roles, each label string equal to its name: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. On **yes**, write them as-is. Only if the user says no, usually because their tracker already uses other names (e.g. `bug:triage` for `needs-triage`), collect the overrides so `triage` applies existing labels instead of creating duplicates.
 
-Default: each role's string equals its name. Ask the user if they want to override any. If their issue tracker has no existing labels, the defaults are fine.
+**Section C - Domain docs.** Default to **single-context** (one `GLOSSARY.md` + `docs/adr/` at the repo root). This fits almost every repo; write it without asking.
 
-**Section C - Domain docs.**
-
-> Explainer: Some skills (`improve-codebase-architecture`, `diagnosing-bugs`, `tdd`) read a `GLOSSARY.md` file to learn the project's domain language, and `docs/adr/` for past architectural decisions. They need to know whether the repo has one global context or multiple (e.g. a monorepo with separate frontend/backend contexts) so they look in the right place.
-
-Confirm the layout:
-
-- **Single-context** - one `GLOSSARY.md` + `docs/adr/` at the repo root. Most repos are this.
-- **Multi-context** - `GLOSSARY-MAP.md` at the root pointing to per-context `GLOSSARY.md` files (typically a monorepo).
+Offer **multi-context** (a root `GLOSSARY-MAP.md` pointing to per-context `GLOSSARY.md` files) only when exploration found monorepo signals. Then confirm which layout they want.
 
 ### 3. Confirm and edit
 
 Show the user a draft of:
 
 - The `## Agent skills` block to add to whichever of `CLAUDE.md` / `AGENTS.md` is being edited (see step 4 for selection rules)
-- The contents of `docs/agents/issue-tracker.md`, `docs/agents/triage-labels.md`, `docs/agents/domain.md`
+- The contents of `docs/agents/issue-tracker.md`, `docs/agents/domain.md`, and `docs/agents/triage-labels.md` (the last only when `triage` is installed)
 
 Let them edit before writing.
 
@@ -108,7 +95,7 @@ The block:
 
 ### Issue tracker
 
-[one-line summary of where issues are tracked, plus whether external PRs are a triage surface]. See `docs/agents/issue-tracker.md`.
+[one-line summary of where issues are tracked]. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
@@ -119,13 +106,15 @@ The block:
 [one-line summary of layout - "single-context" or "multi-context"]. See `docs/agents/domain.md`.
 ```
 
-Then write the three docs files using the seed templates in this skill folder as a starting point:
+Include the `### Triage labels` sub-block, and write `docs/agents/triage-labels.md`, only when `triage` is installed and Section B ran. When it isn't, both are omitted.
+
+Then write the docs files using the seed templates in this skill folder as a starting point:
 
 - [issue-tracker-github.md](./issue-tracker-github.md) - GitHub issue tracker
 - [issue-tracker-gitlab.md](./issue-tracker-gitlab.md) - GitLab issue tracker
 - [issue-tracker-linear.md](./issue-tracker-linear.md) - Linear issue tracker (MCP only)
 - [issue-tracker-local.md](./issue-tracker-local.md) - local-markdown issue tracker
-- [triage-labels.md](./triage-labels.md) - label mapping
+- [triage-labels.md](./triage-labels.md) - label mapping (only if `triage` is installed)
 - [domain.md](./domain.md) - domain doc consumer rules + layout
 
 For "other" issue trackers, write `docs/agents/issue-tracker.md` from scratch using the user's description.
