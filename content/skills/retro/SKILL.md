@@ -8,7 +8,7 @@ The user has asked for a **retrospective**. You are suggesting improvements to t
 
 ## Steps
 
-1. Call the Skill tool with `writing-for-agents` for the writing style guide.
+1. Load the `writing-for-agents` skill (on Claude Code, call the Skill tool with "writing-for-agents"; elsewhere, read its `SKILL.md`) for the writing style guide.
 
 2. Read the primary sources for the session the user specifies. If the user doesn't specify a session, default to the current one. For any other session, read [`SESSION-LOGS.md`](SESSION-LOGS.md) for where each harness stores its transcripts.
 
