@@ -32,6 +32,16 @@ Linear issues live under a specific **team** (and optionally a **project**) with
 - **Opening a PR**: include the Linear ticket's URL and key in the PR description, so GitHub and Linear can connect the PR to the ticket.
 - **Close**: setting an issue's state to a terminal state (e.g. Done/Canceled) via the MCP update-issue tool - there is no separate "close" action.
 
+## Wayfinding operations
+
+Used by `/implement-spec` to read a spec's tickets as a task graph. Linear has native issue relations; "blocks" / "blocked by" is one relation seen from either end. _(Not verified from this repo: the MCP server's tool names and whether its create/update tools accept relations change with the server version, so confirm them with `ToolSearch` on first use.)_
+
+- **Express a blocking link**: add a "blocked by" relation from the ticket to its blocker (equivalently, a "blocks" relation from the blocker to the ticket) through the MCP create-issue or update-issue tool, or a dedicated relation tool if the server exposes one. If the server exposes no way to set relations, put a `Blocked by: ENG-<n>, ENG-<n>` line at the top of the description and tell the user the native relation still needs adding in the Linear UI.
+- **Read a ticket's blockers**: read the ticket with the MCP get-issue tool and take its "blocked by" relations (the issues that block it), then read each blocker's workflow state. For the fallback, parse the `Blocked by` line.
+- **The spec's tickets**: the spec issue's sub-issues when to-tickets used them, otherwise the tickets the spec or the user lists, or a list-issues query by the configured team/project and label.
+- **Frontier**: the spec's tickets not yet in a terminal state whose blockers are all in a terminal state (Done or Canceled). A ticket is unblocked when every blocker is terminal; if a blocker was Canceled rather than Done, mention it to the user, since the work it gated may not exist.
+- **Resolve**: set the ticket's state to Done with the MCP update-issue tool, or let the Linear/GitHub integration move it when the PR that references its key merges.
+
 ## Pull/merge requests as a triage surface
 
 Not applicable. Linear is issue-only - it doesn't host code or pull requests. If this repo's PRs/MRs live on GitHub or GitLab, configure that surface separately in `docs/agents/issue-tracker.md` (Linear can still be the source of truth for issues while PRs are triaged on the git host).

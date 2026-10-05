@@ -14,6 +14,15 @@ Specs and tickets for this repo live as GitLab issues. Use the [`glab`](https://
 
 Infer the repo from `git remote -v` - `glab` does this automatically when run inside a clone.
 
+## Wayfinding operations
+
+Used by `/implement-spec` to read a spec's tickets as a task graph. _(Not verified against a live GitLab instance from this repo; check the commands on first use.)_
+
+- **Express a blocking link**: GitLab's native blocking link, added with the `/blocked_by #<n>` quick action posted as a note: `glab issue note <ticket> --message "/blocked_by #<blocker>"`. Native blocking links are a Premium/Ultimate feature; on the free tier (or where unavailable) fall back to a `Blocked by: #<n>, #<n>` line at the top of the description.
+- **Read a ticket's blockers**: `glab api projects/:id/issues/<iid>/links` lists linked issues with a `link_type`; the blockers are the entries with `link_type` `is_blocked_by`, and each carries its own `state`. For the fallback, parse the `Blocked by` line and check each issue's state.
+- **Frontier**: list the spec's open tickets (`glab issue list -F json`, scoped by label or to the tickets the spec lists) and keep those with no blocker in state `opened`. A ticket is unblocked when every blocker is closed.
+- **Resolve**: post the outcome with `glab issue note`, then `glab issue close <number>`, or let a merged MR that says `Closes #<number>` close it.
+
 ## Merge requests as a triage surface
 
 **MRs as a request surface: no.** _(Set to `yes` if this repo treats external merge requests as feature requests; `/triage` reads this flag.)_

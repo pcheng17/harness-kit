@@ -15,6 +15,16 @@ Specs and tickets for this repo live as GitHub issues. Use the `gh` CLI for all 
 
 Infer the repo from `git remote -v` - `gh` does this automatically when run inside a clone.
 
+## Wayfinding operations
+
+Used by `/implement-spec` to read a spec's tickets as a task graph.
+
+- **Express a blocking link**: use the native "blocked by" links from Conventions above (`--blocked-by` on create, `--add-blocked-by` on edit). Where dependencies aren't available on the repo, fall back to a `Blocked by: #<n>, #<n>` line in the ticket body.
+- **Read a ticket's blockers**: `gh issue view <number> --json blockedBy --jq '[.blockedBy.nodes[] | {number, state}]'`, or the `gh api` call under Conventions (each entry carries `number` and `state`). For the fallback, parse the `Blocked by` line and check each issue's state.
+- **The spec's tickets**: the spec issue's sub-issues (`gh issue view <spec> --json subIssues --jq '[.subIssues.nodes[].number]'`) when to-tickets used them; otherwise the tickets the spec or the user lists.
+- **Frontier**: the open tickets whose blockers are all closed. One call lists them with their blockers: `gh issue list --state open --json number,title,blockedBy --jq '[.[] | select(all(.blockedBy.nodes[]; .state == "CLOSED")) | .number]'`, then keep only the spec's tickets. A ticket is unblocked when every blocker is closed.
+- **Resolve**: close the ticket (`gh issue close <number> --comment "..."`), or let a merged PR that says `Closes #<number>` close it.
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
