@@ -345,6 +345,76 @@ def shared_skill_links(user_home: Path) -> list[Link]:
     ]
 
 
+def yaml_boolean(value: str) -> bool | None:
+    """Read a plain YAML boolean scalar, ignoring quotes and trailing comments."""
+    value = value.split(" #", 1)[0].strip().strip("'\"").lower()
+    return {"true": True, "false": False}.get(value)
+
+
+def skill_is_user_invoked(skill_file: Path) -> bool:
+    """Return whether SKILL.md frontmatter sets disable-model-invocation: true."""
+    lines = skill_file.read_text().splitlines()
+    if not lines or lines[0].strip() != "---":
+        raise KitError(f"{skill_file}: missing frontmatter")
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return False
+        key, separator, value = line.partition(":")
+        if separator and key == "disable-model-invocation":
+            parsed = yaml_boolean(value)
+            if parsed is None:
+                raise KitError(f"{skill_file}: disable-model-invocation must be true or false")
+            return parsed
+    raise KitError(f"{skill_file}: unterminated frontmatter")
+
+
+def codex_implicit_invocation(openai_file: Path) -> bool | None:
+    """Return policy.allow_implicit_invocation from agents/openai.yaml, if set.
+
+    A targeted read of the one key harness-kit checks, not a YAML parser:
+    the key must sit in an indented block under a top-level policy: line.
+    """
+    in_policy = False
+    for line in openai_file.read_text().splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line[0].isspace():
+            in_policy = line.split(" #", 1)[0].rstrip() == "policy:"
+            continue
+        key, separator, value = line.strip().partition(":")
+        if in_policy and separator and key == "allow_implicit_invocation":
+            parsed = yaml_boolean(value)
+            if parsed is None:
+                raise KitError(f"{openai_file}: policy.allow_implicit_invocation must be true or false")
+            return parsed
+    return None
+
+
+def validate_skill_invocation() -> None:
+    """Keep Codex's agents/openai.yaml policy in step with SKILL.md frontmatter.
+
+    Codex ignores disable-model-invocation and reads
+    policy.allow_implicit_invocation instead, so a user-invoked skill must
+    ship the file with it set to false, and a model-invoked one must not.
+    """
+    problems: list[str] = []
+    for skill in sorted((ROOT / "content/skills").iterdir()):
+        skill_file = skill / "SKILL.md"
+        if not skill.is_dir() or not skill_file.is_file():
+            continue
+        openai_file = skill / "agents/openai.yaml"
+        implicit = codex_implicit_invocation(openai_file) if openai_file.is_file() else None
+        if skill_is_user_invoked(skill_file):
+            if not openai_file.is_file():
+                problems.append(f"{skill.name}: user-invoked skill is missing agents/openai.yaml")
+            elif implicit is not False:
+                problems.append(f"{skill.name}: user-invoked skill must set policy.allow_implicit_invocation: false in agents/openai.yaml")
+        elif implicit is False:
+            problems.append(f"{skill.name}: model-invoked skill sets policy.allow_implicit_invocation: false in agents/openai.yaml")
+    if problems:
+        raise KitError("skill invocation mismatch:\n  " + "\n  ".join(problems))
+
+
 def desired_links(harness: str, agents: list[Agent], components: frozenset[str]) -> list[Link]:
     user_home = home()
     links: list[Link] = []
@@ -538,6 +608,8 @@ def install(harness: str, components: frozenset[str]) -> int:
 
 def check(harness: str, components: frozenset[str]) -> int:
     policy, agents = load_catalog(harness, components)
+    if "skills" in components:
+        validate_skill_invocation()
     files = render(policy, agents, harness) if agents else {}
     operations = link_operations(harness, agents, components)
     drift = ("agents" in components and not verify_generated(files, harness)) or any(operation.action != "noop" for operation in operations)

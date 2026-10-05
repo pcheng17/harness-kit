@@ -1337,6 +1337,54 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn(f"cannot read {policy}", result.stderr)
 
+    def check_skills(self) -> subprocess.CompletedProcess[str]:
+        return invoke(self.sandbox, "check", "--component", "skills")
+
+    def test_check_accepts_matching_skill_invocation_declarations(self) -> None:
+        result = self.check_skills()
+        self.assertNotIn("skill invocation mismatch", result.stderr)
+        self.assertEqual(result.returncode, 1, result.stderr)  # valid but not converged
+
+    def test_check_rejects_user_invoked_skill_without_openai_yaml(self) -> None:
+        (self.project / "content/skills/triage/agents/openai.yaml").unlink()
+        result = self.check_skills()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("triage: user-invoked skill is missing agents/openai.yaml", result.stderr)
+
+    def test_check_rejects_user_invoked_skill_allowing_implicit_invocation(self) -> None:
+        openai_yaml = self.project / "content/skills/triage/agents/openai.yaml"
+        for text in (
+            openai_yaml.read_text().replace("allow_implicit_invocation: false", "allow_implicit_invocation: true"),
+            'interface:\n  display_name: "Triage"\n',
+        ):
+            openai_yaml.write_text(text)
+            result = self.check_skills()
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("triage: user-invoked skill must set policy.allow_implicit_invocation: false", result.stderr)
+
+    def test_check_rejects_model_invoked_skill_disallowing_implicit_invocation(self) -> None:
+        openai_yaml = self.project / "content/skills/tdd/agents/openai.yaml"
+        openai_yaml.parent.mkdir()
+        openai_yaml.write_text('interface:\n  display_name: "TDD"\npolicy:\n  allow_implicit_invocation: false\n')
+        result = self.check_skills()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("tdd: model-invoked skill sets policy.allow_implicit_invocation: false", result.stderr)
+
+    def test_check_accepts_model_invoked_skill_allowing_implicit_invocation(self) -> None:
+        openai_yaml = self.project / "content/skills/tdd/agents/openai.yaml"
+        openai_yaml.parent.mkdir()
+        openai_yaml.write_text('interface:\n  display_name: "TDD"\npolicy:\n  allow_implicit_invocation: true\n')
+        result = self.check_skills()
+        self.assertNotIn("skill invocation mismatch", result.stderr)
+        self.assertEqual(result.returncode, 1, result.stderr)
+
+    def test_check_rejects_skill_whose_frontmatter_drops_model_invocation_flag(self) -> None:
+        skill = self.project / "content/skills/triage/SKILL.md"
+        skill.write_text(skill.read_text().replace("disable-model-invocation: true\n", "", 1))
+        result = self.check_skills()
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("triage: model-invoked skill sets policy.allow_implicit_invocation: false", result.stderr)
+
     def test_install_does_not_create_machine_policy(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)
