@@ -10,6 +10,8 @@ Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all op
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
 - **Close**: `gh issue close <number> --comment "..."`
+- **Blocking links**: `gh issue create ... --blocked-by <n>,<n>` sets native "blocked by" links at creation; `gh issue edit <number> --add-blocked-by <n>` / `--remove-blocked-by <n>` change them later. Both take issue numbers, so no `gh api` call or issue ID lookup is needed. Sub-issues use `--parent <n>` (create) or `--add-sub-issue <n>` (edit).
+- **Read blocking links**: `gh api repos/{owner}/{repo}/issues/<number>/dependencies/blocked_by --jq '[.[].number]'`
 
 Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
 
