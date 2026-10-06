@@ -6,10 +6,16 @@ disable-model-invocation: true
 
 Implement the work described by the user in the spec or tickets.
 
-Unless the user explicitly specifies otherwise, all implementation, documentation, testing, and other repository work must be done in a separate git worktree created from `main`. Do not make task changes directly in the primary checkout.
+If the user passes a ticket reference, fetch it with its comments using the "fetch the relevant ticket" workflow in `docs/agents/issue-tracker.md`, then read its parent spec and any blocking tickets. If a blocker is still open, stop and tell the user which one instead of starting.
 
-Load the `tdd` skill (on Claude Code, call the Skill tool with "tdd"; elsewhere, read its `SKILL.md`) and use it where possible, at pre-agreed seams.
+Unless the user explicitly specifies otherwise, all implementation, documentation, testing, and other repository work must be done in a separate git worktree created from `main`. Fetch the remote first and branch from its `main` (e.g. `origin/main`), not a possibly stale local `main`, on a branch named after the ticket (e.g. `<number>-<short-slug>`), in the repo's usual worktree location. Do not make task changes directly in the primary checkout.
 
-Run single test files regularly, and the full test suite once at the end.
+Load the `tdd` skill (on Claude Code, call the Skill tool with "tdd"; elsewhere, read its `SKILL.md`) and use it where possible, at pre-agreed seams. Confirm the seams with the user before writing the first test; seams the ticket or spec names explicitly count as agreed.
 
-Once done, load the `code-review` skill (on Claude Code, call the Skill tool with "code-review"; elsewhere, read its `SKILL.md`) and use it to review the work.
+Build and run the relevant single tests regularly as you go, and run the full test suite once at the end.
+
+Once done, load the `code-review` skill (on Claude Code, call the Skill tool with "code-review"; elsewhere, read its `SKILL.md`) and use it to review the work, passing the remote `main` the worktree branched from (e.g. `origin/main`) as the fixed point.
+
+Once review findings are addressed, commit, push the branch, load the `pr` skill (on Claude Code, call the Skill tool with "pr"; elsewhere, read its `SKILL.md`) to shape the PR body, include the ticket's closing keyword where the tracker supports one (e.g. `Closes #N`), and open the PR. Skip or adjust this step if the user says otherwise (e.g. no PR wanted).
+
+End with a brief FYI: `/cleanup-merged-worktree` is available once the PR merges, and `/retro` if the session felt bumpy.
