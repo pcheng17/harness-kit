@@ -2,6 +2,7 @@
 name: debug-github-actions
 description: Analyze GitHub Actions failures and identify root causes
 argument-hint: <url>
+disable-model-invocation: true
 ---
 
 Investigate this GitHub Actions URL: $ARGUMENTS

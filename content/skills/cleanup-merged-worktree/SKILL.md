@@ -1,6 +1,7 @@
 ---
 name: cleanup-merged-worktree
-description: "Use when the pull request for the current git worktree's branch has been merged and the user wants it cleaned up - deletes the worktree, switches the primary checkout back to main, updates main, and deletes the now-merged local branch. Local cleanup only; never touches the remote branch."
+description: "Clean up a merged PR's worktree - remove it, update main, and delete the local branch. Never touches the remote."
+disable-model-invocation: true
 ---
 
 # Cleanup Merged Worktree

@@ -1,6 +1,7 @@
 ---
 name: address-pr-comments
-description: Walk through all of a pull/merge request's unresolved review comment threads with the user - scan every thread, discuss each one and get the user's decision, then execute the agreed plan (one commit per thread, reply on the thread with a link to the resolving commit). Threads are never resolved/closed on the platform; that's left to the reviewer. Use when the user wants to "address PR comments", "resolve review feedback", "go through the review threads", "triage the review comments", or work through a specific PR/MR's comments interactively.
+description: "Walk through a PR's unresolved review threads with you, then commit each agreed fix and reply on its thread."
+disable-model-invocation: true
 ---
 
 # Address PR Comments
