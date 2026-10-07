@@ -10,7 +10,7 @@ If the user passes a ticket reference, fetch it with its comments using the "fet
 
 Unless the user explicitly specifies otherwise, all implementation, documentation, testing, and other repository work must be done in a separate git worktree created from `main`. Fetch the remote first and branch from its `main` (e.g. `origin/main`), not a possibly stale local `main`, on a branch named after the ticket (e.g. `<number>-<short-slug>`), in the repo's usual worktree location. Do not make task changes directly in the primary checkout.
 
-Load the `tdd` skill (on Claude Code, call the Skill tool with "tdd"; elsewhere, read its `SKILL.md`) and use it where possible, at pre-agreed seams. Confirm the seams with the user before writing the first test; seams the ticket or spec names explicitly count as agreed.
+Load the `tdd` skill (on Claude Code, call the Skill tool with "tdd"; elsewhere, read its `SKILL.md`) and use it where possible, at pre-agreed seams. Before confirming seams, check each new type, view or factory the ticket names against the existing code, and propose reusing any existing artifact that already holds that data or behavior. Confirm the seams with the user before writing the first test; seams the ticket or spec names explicitly count as agreed, except a ticket-named new type this check replaced.
 
 Build and run the relevant single tests regularly as you go, and run the full test suite once at the end.
 
