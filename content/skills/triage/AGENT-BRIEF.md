@@ -12,6 +12,7 @@ The issue may sit in `ready-for-agent` for days or weeks. The codebase will chan
 
 - **Do** describe interfaces, types, and behavioral contracts
 - **Do** name specific types, function signatures, or config shapes that the agent should look for or modify
+- **Do** name the existing types to reuse first; justify any new type by saying why no existing type can serve
 - **Don't** reference file paths - they go stale
 - **Don't** reference line numbers
 - **Don't** assume the current implementation structure will remain the same
@@ -54,6 +55,7 @@ Be specific about edge cases and error conditions.
 
 **Key interfaces:**
 - `TypeName` - what needs to change and why
+- `NewType` (new) - why no existing type can serve
 - `functionName()` return type - what it currently returns vs what it should return
 - Config shape - any new configuration options needed
 
