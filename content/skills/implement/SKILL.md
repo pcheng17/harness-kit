@@ -16,12 +16,12 @@ When the spec and the existing code disagree, or the spec is silent on a decisio
 
 Keep changes to what the ticket asks. Collect anything you spot outside it in a **Noticed, not touched** list for the final message.
 
-Build and run the relevant single tests regularly as you go, and run the full test suite once at the end.
+Build and run the relevant single tests regularly as you go. Commit each slice as a **save point** once it's green - the build passes and the tests covering it pass - staging only that slice's files, so every commit on the branch is a working state. When a slice won't go green, `git restore` back to the last save point and rethink it rather than committing it broken. Run the full test suite once all slices are in.
 
 Once the suite is green, load the `code-simplification` skill (on Claude Code, call the Skill tool with "code-simplification"; elsewhere, read its `SKILL.md`) and use it on the work, passing the remote `main` the worktree branched from (e.g. `origin/main`) as the fixed point. Merge its out-of-scope notes into **Noticed, not touched**.
 
 Once done, load the `code-review` skill (on Claude Code, call the Skill tool with "code-review"; elsewhere, read its `SKILL.md`) and use it to review the work, passing the same fixed point.
 
-Once review findings are addressed, commit, push the branch, load the `pr` skill (on Claude Code, call the Skill tool with "pr"; elsewhere, read its `SKILL.md`) to shape the PR body, include the ticket's closing keyword where the tracker supports one (e.g. `Closes #N`), and open the PR. Skip or adjust this step if the user says otherwise (e.g. no PR wanted).
+Commit each review fix as its own save point, then push the branch, load the `pr` skill (on Claude Code, call the Skill tool with "pr"; elsewhere, read its `SKILL.md`) to shape the PR body, include the ticket's closing keyword where the tracker supports one (e.g. `Closes #N`), and open the PR. Skip or adjust this step if the user says otherwise (e.g. no PR wanted).
 
 End with the **Noticed, not touched** list (if any), then a brief FYI: `/cleanup-merged-worktree` is available once the PR merges, and `/retro` if the session felt bumpy.
