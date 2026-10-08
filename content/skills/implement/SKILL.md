@@ -16,9 +16,9 @@ When the spec and the existing code disagree, or the spec is silent on a decisio
 
 Keep changes to what the ticket asks. Collect anything you spot outside it in a **Noticed, not touched** list for the final message.
 
-Build and run the relevant single tests regularly as you go. Commit each slice as a **save point** once it's green - the build and the full test suite pass - staging only that slice's files, so every commit on the branch is a working state. When a slice won't go green, `git restore` back to the last save point and rethink it rather than committing it broken.
+Build and run the relevant single tests regularly as you go. Commit each slice as a **save point** once it's green - the build passes and the tests covering it pass - staging only that slice's files, so every commit on the branch is a working state. When a slice won't go green, `git restore` back to the last save point and rethink it rather than committing it broken. Run the full test suite once all slices are in.
 
-Once all slices are in, load the `code-simplification` skill (on Claude Code, call the Skill tool with "code-simplification"; elsewhere, read its `SKILL.md`) and use it on the work, passing the remote `main` the worktree branched from (e.g. `origin/main`) as the fixed point. Merge its out-of-scope notes into **Noticed, not touched**.
+Once the suite is green, load the `code-simplification` skill (on Claude Code, call the Skill tool with "code-simplification"; elsewhere, read its `SKILL.md`) and use it on the work, passing the remote `main` the worktree branched from (e.g. `origin/main`) as the fixed point. Merge its out-of-scope notes into **Noticed, not touched**.
 
 Once done, load the `code-review` skill (on Claude Code, call the Skill tool with "code-review"; elsewhere, read its `SKILL.md`) and use it to review the work, passing the same fixed point.
 

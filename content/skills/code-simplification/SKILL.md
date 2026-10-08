@@ -35,7 +35,7 @@ Simplify toward **deep modules**, in the `codebase-design` vocabulary:
 
 ### 5. Apply one at a time
 
-For each simplification: make the edit, run the tests covering it, and if they go **red**, undo that edit and move on to the next candidate. When the branch is built in save points (as `implement` does), commit each simplification on its own once the build and the full test suite pass, separate from feature commits, and undo a red one with `git restore`. Test files, including ones added in this change, stay byte-for-byte unchanged; a simplification that needs a test edit has changed behaviour, so undo it. Error handling, validation, and logging keep their current behaviour.
+For each simplification: make the edit, run the tests covering it, and if they go **red**, undo that edit and move on to the next candidate. When the branch is built in save points (as `implement` does), commit each green simplification on its own, separate from feature commits, and undo a red one with `git restore`. Test files, including ones added in this change, stay byte-for-byte unchanged; a simplification that needs a test edit has changed behaviour, so undo it. Error handling, validation, and logging keep their current behaviour.
 
 ### 6. Check the whole
 
