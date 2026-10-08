@@ -34,3 +34,7 @@ Ask: "What's the public interface, and which seams should we test?"
 - **Red before green.** Write the failing test first, then only enough code to pass it. Don't anticipate future tests or add speculative features.
 - **One slice at a time.** One seam, one test, one minimal implementation per cycle.
 - **Refactoring is not part of the loop.** It belongs to the simplification pass after the suite is green (see the `code-simplification` skill), not the red → green implementation cycle.
+
+## After the loop
+
+Once all slices are in and the full suite is green, load the `code-simplification` skill (on Claude Code, call the Skill tool with "code-simplification"; elsewhere, read its `SKILL.md`) and use it on the work, passing the commit the work started from as the fixed point. Skip this when a caller such as `implement` drives this skill, since the caller runs its own simplification pass.
