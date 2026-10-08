@@ -12,10 +12,16 @@ Unless the user explicitly specifies otherwise, all implementation, documentatio
 
 Load the `tdd` skill (on Claude Code, call the Skill tool with "tdd"; elsewhere, read its `SKILL.md`) and use it where possible, at pre-agreed seams. Before confirming seams, check each new type, view or factory the ticket names against the existing code, and propose reusing any existing artifact that already holds that data or behavior. Confirm the seams with the user before writing the first test; seams the ticket or spec names explicitly count as agreed, except a ticket-named new type this check replaced.
 
+When the spec and the existing code disagree, or the spec is silent on a decision the code sets no precedent for, stop and put the options to the user with your recommendation.
+
+Keep changes to what the ticket asks. Collect anything you spot outside it in a **Noticed, not touched** list for the final message.
+
 Build and run the relevant single tests regularly as you go, and run the full test suite once at the end.
 
-Once done, load the `code-review` skill (on Claude Code, call the Skill tool with "code-review"; elsewhere, read its `SKILL.md`) and use it to review the work, passing the remote `main` the worktree branched from (e.g. `origin/main`) as the fixed point.
+Once the suite is green, load the `code-simplification` skill (on Claude Code, call the Skill tool with "code-simplification"; elsewhere, read its `SKILL.md`) and use it on the work, passing the remote `main` the worktree branched from (e.g. `origin/main`) as the fixed point. Merge its out-of-scope notes into **Noticed, not touched**.
+
+Once done, load the `code-review` skill (on Claude Code, call the Skill tool with "code-review"; elsewhere, read its `SKILL.md`) and use it to review the work, passing the same fixed point.
 
 Once review findings are addressed, commit, push the branch, load the `pr` skill (on Claude Code, call the Skill tool with "pr"; elsewhere, read its `SKILL.md`) to shape the PR body, include the ticket's closing keyword where the tracker supports one (e.g. `Closes #N`), and open the PR. Skip or adjust this step if the user says otherwise (e.g. no PR wanted).
 
-End with a brief FYI: `/cleanup-merged-worktree` is available once the PR merges, and `/retro` if the session felt bumpy.
+End with the **Noticed, not touched** list (if any), then a brief FYI: `/cleanup-merged-worktree` is available once the PR merges, and `/retro` if the session felt bumpy.

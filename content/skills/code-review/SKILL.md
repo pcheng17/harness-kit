@@ -55,15 +55,22 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 - **Middle Man** - a class or function that mostly just delegates onward. → cut it, call the real target direct.
 - **Refused Bequest** - a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
 
+The Standards axis also carries the **lowered-bar check**. An agent facing a red check tends to take the cheapest road to green, so flag each of these the diff introduces as a hard finding, even where tooling would otherwise catch it:
+
+- **Threshold moved** - a coverage or performance budget lowered, a lint rule or severity relaxed, a check dropped from CI.
+- **Test weakened** - `.skip`/`xfail` added, a test file deleted, assertions removed from a test that stayed.
+- **Checker silenced** - a new suppression (`@ts-ignore`, `eslint-disable`, `# noqa`, `# type: ignore`, `istanbul ignore`, `nosemgrep`).
+- **Work unfinished** - a stub that throws, an empty `catch`, a `TODO` where the implementation should be.
+
 ### 4. Spawn both sub-agents in parallel
 
-Spawn both sub-agents in the same turn so they run concurrently, not one after the other.
+Spawn both sub-agents in the same turn so they run concurrently, not one after the other. Give each one the diff and its sources only, never the author's account of the work: a reviewer handed conclusions tends to validate them.
 
 **Standards sub-agent prompt** - include:
 
 - The full diff command and commit list.
-- The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full - the sub-agent has no other access to it.
-- The brief: "Report - per file/hunk where relevant - (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls - documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
+- The list of standards-source files you found in step 3, **plus the smell baseline and lowered-bar check from step 3** pasted in full - the sub-agent has no other access to it.
+- The brief: "Report - per file/hunk where relevant - (a) every place the diff violates a documented standard: cite the standard (file + the rule); (b) any baseline smell you spot: name it and quote the hunk; and (c) every lowered-bar move: name it and quote the hunk. Distinguish hard violations from judgement calls - documented-standard breaches can be hard, baseline smells are always judgement calls, lowered-bar moves are always hard, and a documented repo standard overrides the baseline. Skip anything tooling enforces, except lowered-bar moves. Under 400 words."
 
 **Spec sub-agent prompt** - include:
 
