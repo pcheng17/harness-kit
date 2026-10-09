@@ -6,7 +6,7 @@
   "keywords": ["pi-package"],
   "pi": {
     "extensions": [
-      "./node_modules/pi-subagents/index.ts",
+      "./node_modules/pi-subagents/index.js",
       "./node_modules/@juicesharp/rpiv-ask-user-question/index.ts",
       "./node_modules/@juicesharp/rpiv-btw/index.ts",
       "./node_modules/@juicesharp/rpiv-todo/index.ts"
