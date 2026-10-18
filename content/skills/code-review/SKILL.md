@@ -8,7 +8,7 @@ Two-axis review of the diff between `HEAD` and a fixed point the user supplies:
 - **Standards** - does the code conform to this repo's documented coding standards?
 - **Spec** - does the code faithfully implement the originating ticket / spec?
 
-Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
+Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings. A repo can add a **verification gate** (build, tests, coverage) through its review addendum; see step 3.
 
 The issue tracker should have been provided to you. If `docs/agents/issue-tracker.md` is missing, tell the user to run `/setup-pcheng-skills`.
 
@@ -34,6 +34,16 @@ Look for the originating spec, in this order:
 ### 3. Identify the standards sources
 
 Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`.
+
+If `docs/agents/code-review.md` exists, it is the repo's **review addendum**: per-repo input this skill cannot infer (architecture docs, language-specific lowered-bar moves, deterministic checks, build and test commands). Read it and apply each section it has:
+
+- **Standards sources** - add the listed files to the standards sources.
+- **Lowered-bar patterns** - append them to the lowered-bar check below.
+- **Mechanical checks** - run the listed command(s) now, before spawning anything, with the fixed point from step 1 as the argument. Paste every line of stdout into the Standards brief verbatim so the sub-agent reports it rather than re-deriving it. Lines are hard findings unless the addendum marks a class of them as judgement calls. If a command fails to run (a bad argument or missing tool, as opposed to reporting findings), stop and report that instead of reviewing.
+- **Reviewer brief** - append it to the Standards and Spec briefs: what this repo's maintainer weights most.
+- **Verification** - run in step 4 as a third sub-agent.
+
+A missing addendum is fine: the repo gets the generic review.
 
 On top of whatever the repo documents, the Standards axis always carries the **smell baseline** below - a fixed set of Fowler code smells (_Refactoring_, ch.3) that applies even when a repo documents nothing. Two rules bind it:
 
@@ -62,29 +72,37 @@ The Standards axis also carries the **lowered-bar check**. An agent facing a red
 - **Checker silenced** - a new suppression (`@ts-ignore`, `eslint-disable`, `# noqa`, `# type: ignore`, `istanbul ignore`, `nosemgrep`).
 - **Work unfinished** - a stub that throws, an empty `catch`, a `TODO` where the implementation should be.
 
-### 4. Spawn both sub-agents in parallel
+### 4. Spawn the sub-agents in parallel
 
-Spawn both sub-agents in the same turn so they run concurrently, not one after the other. Give each one the diff and its sources only, never the author's account of the work: a reviewer handed conclusions tends to validate them.
+Spawn every sub-agent (Standards, Spec, and Verification when the addendum calls for it) in the same turn so they run concurrently, not one after the other. Give each one the diff and its sources only, never the author's account of the work: a reviewer handed conclusions tends to validate them.
 
 **Standards sub-agent prompt** - include:
 
 - The full diff command and commit list.
-- The list of standards-source files you found in step 3, **plus the smell baseline and lowered-bar check from step 3** pasted in full - the sub-agent has no other access to it.
-- The brief: "Report - per file/hunk where relevant - (a) every place the diff violates a documented standard: cite the standard (file + the rule); (b) any baseline smell you spot: name it and quote the hunk; and (c) every lowered-bar move: name it and quote the hunk. Distinguish hard violations from judgement calls - documented-standard breaches can be hard, baseline smells are always judgement calls, lowered-bar moves are always hard, and a documented repo standard overrides the baseline. Skip anything tooling enforces, except lowered-bar moves. Under 400 words."
+- The list of standards-source files you found in step 3, **plus the smell baseline and lowered-bar check from step 3** pasted in full, with the addendum's lowered-bar patterns appended - the sub-agent has no other access to it.
+- The mechanical-check output from the addendum, if any, with the addendum's note on which lines are hard and which are judgement calls.
+- The addendum's Reviewer brief, if any.
+- The brief: "Report - per file/hunk where relevant - (a) every place the diff violates a documented standard: cite the standard (file + the rule); (b) any baseline smell you spot: name it and quote the hunk; (c) every lowered-bar move: name it and quote the hunk; and (d) each mechanical-check line, repeated as-is. Distinguish hard violations from judgement calls - documented-standard breaches can be hard, baseline smells are always judgement calls, lowered-bar moves are always hard, and a documented repo standard overrides the baseline. Skip anything tooling enforces, except lowered-bar moves. Under 400 words."
 
 **Spec sub-agent prompt** - include:
 
 - The diff command and commit list.
 - The path or fetched contents of the spec.
+- The addendum's Reviewer brief, if any.
 - The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
 
 If the spec is missing, skip the Spec sub-agent and note this in the final report.
 
+**Verification sub-agent** - only when the addendum has a Verification section. Include:
+
+- The addendum's Verification section in full, and the diff command.
+- The brief: "Run each command in order from the repository root. Report pass or fail per command; on a failure, quote the first relevant lines of output and stop. Facts only, no review commentary. Under 200 words."
+
 ### 5. Aggregate
 
-Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings - the two axes are deliberately separate (see _Why two axes_).
+Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings - the two axes are deliberately separate (see _Why two axes_). When the verification sub-agent ran, add its report under `## Verification`: it is a gate, not a third axis - it states what ran and what failed, and carries no judgement to rerank.
 
-End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes - that's the reranking the separation exists to prevent.
+End with a one-line summary: total findings per axis, the worst issue _within each axis_ (if any), and whether verification passed when it ran. Don't pick a single winner across axes - that's the reranking the separation exists to prevent.
 
 ## Why two axes
 
