@@ -1,6 +1,6 @@
 ---
 name: worktree-slots
-description: "Worktree slots: reusable numbered git worktrees with warm build output. Use when taking a worktree for a branch, or parking one once its PR merges or the work is abandoned."
+description: "Worktree slots: reusable numbered git worktrees with warm build output. Use when taking a worktree for a branch, parking one once its PR merges or the work is abandoned, or pruning worktrees to reclaim disk."
 ---
 
 Linked worktrees live in numbered **slots** beside the primary checkout: `~/dev/foo` gets `~/dev/foo-wt-00`, `~/dev/foo-wt-01` and so on. A slot's path never changes, so its build output stays configured and warm when a later branch reuses it.
