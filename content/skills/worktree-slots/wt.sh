@@ -139,7 +139,8 @@ update_submodules() {
         url_overrides+=(-c "submodule.$name.url=$primary/$sub_path")
     done < <(git config -f "$path/.gitmodules" --get-regexp '^submodule\..*\.path$' || true)
     # Git refuses a local-path submodule URL over the file transport by default.
-    git -C "$path" -c protocol.file.allow=always "${url_overrides[@]}" submodule update "$@" --recursive
+    # The +-guard keeps an empty array legal under set -u on bash older than 4.4 (stock macOS).
+    git -C "$path" -c protocol.file.allow=always ${url_overrides[@]+"${url_overrides[@]}"} submodule update "$@" --recursive
 }
 
 # Puts <branch> in a slot and prints the slot path last on stdout.
