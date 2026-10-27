@@ -26,4 +26,4 @@ Once done, load the `code-review` skill (on Claude Code, call the Skill tool wit
 
 Commit each review fix as its own save point, then push the branch, load the `pr` skill (on Claude Code, call the Skill tool with "pr"; elsewhere, read its `SKILL.md`) to shape the PR body, include the ticket's closing keyword where the tracker supports one (e.g. `Closes #N`), and open the PR. Skip or adjust this step if the user says otherwise (e.g. no PR wanted).
 
-End with the **Noticed, not touched** list (if any), then a brief FYI: once the PR merges, park the slot with `wt.sh park` (or run `/cleanup-free-worktrees` for a worktree outside the slots), and `/retro` if the session felt bumpy.
+End with the **Noticed, not touched** list (if any), then a brief FYI: run `wt.sh park` once the PR merges (`wt.sh prune` reclaims disk), and `/retro` if the session felt bumpy.

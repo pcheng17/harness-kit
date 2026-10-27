@@ -75,7 +75,6 @@ The steps around a PR once the code is written.
 - **`/address-pr-comments`** - work through a PR's unresolved review threads with you: discuss every thread and get your decision first, then one commit per thread and a reply linking the commit. It never resolves threads; that's left to the reviewer.
 - **`/debug-github-actions`** - pass it a failing GitHub Actions run URL; it finds what actually caused the failure, checks the same job's recent history for flakiness, and reports the root cause.
 - **`/resolve-merge-conflict`** - finish an in-progress merge or rebase: read the primary sources behind each side, resolve every hunk preserving both intents where possible, run the project's checks, and complete it.
-- **`/cleanup-merged-worktree`** - once the PR is merged, delete its worktree, bring the primary checkout back to an up-to-date `main`, and delete the merged local branch. Local only; it never touches the remote branch.
 
 ## Standalone
 
