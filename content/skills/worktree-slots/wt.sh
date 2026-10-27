@@ -37,13 +37,14 @@ slot_path() {
     printf '%s%02d' "$slot_prefix" "$1"
 }
 
-# Prints "<k> <path> <branch or empty> <locked: 0/1> <lock reason>" for each linked worktree beside
-# the primary checkout, where k is the slot number, or -1 for a legacy (non-slot) worktree. Fields
+# Prints "<k> <path> <branch or empty> <locked: 0/1> <lock reason>" for each linked worktree directly
+# beside the primary checkout (a sibling directory), where k is the slot number, or -1 for a legacy (non-slot) worktree. Fields
 # are separated by \x1f, which unlike a tab keeps empty fields under read.
 linked_worktrees() {
     git -C "$primary" worktree list --porcelain | awk -v primary="$primary" -v parent="$(dirname "$primary")/" -v prefix="$slot_prefix" '
         function flush() {
-            if (path != "" && path != primary && index(path, parent) == 1) {
+            rest = substr(path, length(parent) + 1)
+            if (path != "" && path != primary && index(path, parent) == 1 && index(rest, "/") == 0) {
                 k = substr(path, length(prefix) + 1)
                 if (index(path, prefix) != 1 || k !~ /^[0-9][0-9]+$/) k = -1
                 printf "%d\037%s\037%s\037%d\037%s\n", k, path, branch, locked, reason
@@ -291,6 +292,8 @@ prune() {
     while IFS=$'\x1f' read -r k path branch locked _; do
         if [ "$locked" -eq 1 ]; then
             reason=locked
+        elif [ ! -d "$path" ]; then
+            reason="directory missing"
         elif is_dirty "$path"; then
             reason="uncommitted changes"
         elif [ -z "$branch" ]; then

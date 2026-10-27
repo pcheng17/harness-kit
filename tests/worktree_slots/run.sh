@@ -242,6 +242,8 @@ legacy "$T/dev/proj-open" legacy/open
 legacy "$T/dev/proj-locked" legacy/locked; merged legacy-locked; git -C "$P" worktree lock "$T/dev/proj-locked"
 mkdir -p "$T/elsewhere"
 legacy "$T/elsewhere/proj-far" legacy/far; merged legacy-far
+legacy "$P/nested" legacy/nested; merged legacy-nested
+legacy "$T/dev/proj-gone" legacy/gone; merged legacy-gone; rm -rf "$T/dev/proj-gone"
 out="$(wt prune --keep 99 2>&1)"; rc=$?
 check "prune with legacy worktrees succeeds" [ $rc -eq 0 ]
 check "merged clean legacy removed" [ ! -e "$T/dev/proj-merged" ]
@@ -254,6 +256,8 @@ check "locked legacy kept" [ -d "$T/dev/proj-locked" ]
 check "locked reason given" grep -q "Kept $T/dev/proj-locked: locked" <<<"$out"
 check "detached legacy kept" grep -q "Kept $T/dev/proj-other: detached" <<<"$out"
 check "worktree outside the parent directory ignored" bash -c '[ -d "$1" ] && ! grep -q proj-far <<<"$2"' _ "$T/elsewhere/proj-far" "$out"
+check "worktree nested below the parent directory ignored" bash -c '[ -d "$1" ] && ! grep -q nested <<<"$2"' _ "$P/nested" "$out"
+check "vanished legacy kept as missing" grep -q "Kept $T/dev/proj-gone: directory missing" <<<"$out"
 check "primary never mentioned" not grep -q "$P:" <<<"$out"
 
 echo "== .worktree-setup runs in a new slot, not on reuse, and its failure fails take"
