@@ -234,6 +234,28 @@ check "warns over threshold" grep -q 'WT_WARN_GIB' <<<"$out"
 
 check "warning names the prune command" grep -q "wt.sh prune" <<<"$out"
 
+echo "== prune removes merged, clean legacy worktrees and says why it keeps the rest"
+legacy() { git -C "$P" worktree add -q -b "$2" "$1" origin/main 2>/dev/null; }
+legacy "$T/dev/proj-merged" legacy/merged; merged legacy-merged
+legacy "$T/dev/proj-dirty" legacy/dirty; merged legacy-dirty; touch "$T/dev/proj-dirty/untracked"
+legacy "$T/dev/proj-open" legacy/open
+legacy "$T/dev/proj-locked" legacy/locked; merged legacy-locked; git -C "$P" worktree lock "$T/dev/proj-locked"
+mkdir -p "$T/elsewhere"
+legacy "$T/elsewhere/proj-far" legacy/far; merged legacy-far
+out="$(wt prune --keep 99 2>&1)"; rc=$?
+check "prune with legacy worktrees succeeds" [ $rc -eq 0 ]
+check "merged clean legacy removed" [ ! -e "$T/dev/proj-merged" ]
+check "its merged branch deleted" not has_branch legacy/merged
+check "merged dirty legacy kept" [ -d "$T/dev/proj-dirty" ]
+check "dirty reason given" grep -q "Kept $T/dev/proj-dirty: uncommitted changes" <<<"$out"
+check "unmerged legacy kept" [ -d "$T/dev/proj-open" ]
+check "unmerged reason given" grep -q "Kept $T/dev/proj-open: PR NONE" <<<"$out"
+check "locked legacy kept" [ -d "$T/dev/proj-locked" ]
+check "locked reason given" grep -q "Kept $T/dev/proj-locked: locked" <<<"$out"
+check "detached legacy kept" grep -q "Kept $T/dev/proj-other: detached" <<<"$out"
+check "worktree outside the parent directory ignored" bash -c '[ -d "$1" ] && ! grep -q proj-far <<<"$2"' _ "$T/elsewhere/proj-far" "$out"
+check "primary never mentioned" not grep -q "$P:" <<<"$out"
+
 echo "== .worktree-setup runs in a new slot, not on reuse, and its failure fails take"
 setup
 export HOOK_LOG="$T/hook.log" HOOK_FAIL="$T/hook-fail"

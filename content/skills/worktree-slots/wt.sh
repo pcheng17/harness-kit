@@ -37,22 +37,30 @@ slot_path() {
     printf '%s%02d' "$slot_prefix" "$1"
 }
 
-# Prints "<k> <path> <branch or empty> <locked: 0/1> <lock reason>" for each registered slot, sorted
-# by slot number. Fields are separated by \x1f, which unlike a tab keeps empty fields under read.
-slots() {
-    git -C "$primary" worktree list --porcelain | awk -v prefix="$slot_prefix" '
+# Prints "<k> <path> <branch or empty> <locked: 0/1> <lock reason>" for each linked worktree beside
+# the primary checkout, where k is the slot number, or -1 for a legacy (non-slot) worktree. Fields
+# are separated by \x1f, which unlike a tab keeps empty fields under read.
+linked_worktrees() {
+    git -C "$primary" worktree list --porcelain | awk -v primary="$primary" -v prefix="$slot_prefix" '
         function flush() {
-            if (path != "" && index(path, prefix) == 1) {
+            if (path != "" && path != primary && index(path, parent) == 1) {
                 k = substr(path, length(prefix) + 1)
-                if (k ~ /^[0-9][0-9]+$/) printf "%d\037%s\037%s\037%d\037%s\n", k, path, branch, locked, reason
+                if (index(path, prefix) != 1 || k !~ /^[0-9][0-9]+$/) k = -1
+                printf "%d\037%s\037%s\037%d\037%s\n", k, path, branch, locked, reason
             }
             path = ""; branch = ""; locked = 0; reason = ""
         }
+        BEGIN        { parent = primary; sub(/[^\/]*$/, "", parent) }
         /^worktree / { flush(); path = substr($0, 10) }
         /^branch /   { branch = substr($0, 19) }
         /^locked/    { locked = 1; reason = substr($0, 8) }
         END          { flush() }
-    ' | sort -n
+    '
+}
+
+# Prints linked_worktrees records for the slots only, sorted by slot number.
+slots() {
+    linked_worktrees | awk -F'\037' '$1 >= 0' | sort -n
 }
 
 # Succeeds when the worktree has uncommitted changes, or cannot be read (e.g. its directory is gone).
@@ -255,9 +263,10 @@ list() {
     warn_disk_use
 }
 
-# Removes free and done slots, highest-numbered first, keeping the lowest <keep> free ones.
+# Removes free and done slots, highest-numbered first, keeping the lowest <keep> free ones, and legacy
+# (non-slot) worktrees that are unlocked, clean and on a merged branch, saying why it keeps the rest.
 prune() {
-    local keep=0 k path branch locked state kept=0 left i
+    local keep=0 k path branch locked state kept=0 left i reason
     local paths=() branches=()
     if [ $# -gt 0 ]; then
         [ "$1" = --keep ] && [ $# -eq 2 ] && [[ "$2" =~ ^[0-9]+$ ]] || usage
@@ -280,6 +289,24 @@ prune() {
         fi
     done < <(slots)
 
+    while IFS=$'\x1f' read -r k path branch locked _; do
+        if [ "$locked" -eq 1 ]; then
+            reason=locked
+        elif is_dirty "$path"; then
+            reason="uncommitted changes"
+        elif [ -z "$branch" ]; then
+            reason=detached
+        elif state="$(pr_state "$branch")" && [ "$state" != MERGED ]; then
+            reason="PR $state"
+        else
+            paths+=("$path")
+            branches+=("$branch")
+            continue
+        fi
+        echo "Kept $path: $reason"
+    done < <(linked_worktrees | awk -F'\037' '$1 < 0')
+
+    # In reverse, so slots go highest-numbered first.
     for ((i = ${#paths[@]} - 1; i >= 0; i--)); do
         path="${paths[i]}"
         branch="${branches[i]}"
