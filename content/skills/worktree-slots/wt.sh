@@ -5,8 +5,8 @@
 #
 # Linked worktrees live in fixed slots at ../<primary>-wt-<kk> beside the primary checkout, so a
 # slot's build output stays warm when a later branch reuses it. A slot is free (detached, unlocked,
-# clean), done (on a branch whose PR is merged, unlocked, clean) or busy (anything else). Worktrees
-# outside the slot paths are never touched.
+# clean), done (on a branch whose PR is merged, unlocked, clean) or busy (anything else). Only prune
+# touches other worktrees, and only legacy ones beside the primary checkout.
 set -euo pipefail
 
 primary=""
@@ -41,7 +41,7 @@ slot_path() {
 # the primary checkout, where k is the slot number, or -1 for a legacy (non-slot) worktree. Fields
 # are separated by \x1f, which unlike a tab keeps empty fields under read.
 linked_worktrees() {
-    git -C "$primary" worktree list --porcelain | awk -v primary="$primary" -v prefix="$slot_prefix" '
+    git -C "$primary" worktree list --porcelain | awk -v primary="$primary" -v parent="$(dirname "$primary")/" -v prefix="$slot_prefix" '
         function flush() {
             if (path != "" && path != primary && index(path, parent) == 1) {
                 k = substr(path, length(prefix) + 1)
@@ -50,7 +50,6 @@ linked_worktrees() {
             }
             path = ""; branch = ""; locked = 0; reason = ""
         }
-        BEGIN        { parent = primary; sub(/[^\/]*$/, "", parent) }
         /^worktree / { flush(); path = substr($0, 10) }
         /^branch /   { branch = substr($0, 19) }
         /^locked/    { locked = 1; reason = substr($0, 8) }
