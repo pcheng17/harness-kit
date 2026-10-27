@@ -8,7 +8,7 @@ Implement the work described by the user in the spec or tickets.
 
 If the user passes a ticket reference, fetch it with its comments using the "fetch the relevant ticket" workflow in `docs/agents/issue-tracker.md`, then read its parent spec and any blocking tickets. If a blocker is still open, stop and tell the user which one instead of starting.
 
-Unless the user explicitly specifies otherwise, all implementation, documentation, testing, and other repository work must be done in a separate git worktree created from `main`. Fetch the remote first and branch from its `main` (e.g. `origin/main`), not a possibly stale local `main`, on a branch named after the ticket (e.g. `<number>-<short-slug>`), in the repo's usual worktree location. Do not make task changes directly in the primary checkout.
+Unless the user explicitly specifies otherwise, all implementation, documentation, testing, and other repository work must be done in a separate git worktree created from `main`. Fetch the remote first and branch from its `main` (e.g. `origin/main`), not a possibly stale local `main`, on a branch named after the ticket (e.g. `<number>-<short-slug>`). Take the worktree with the `worktree-slots` skill (`~/.claude/skills/worktree-slots/wt.sh take <branch>`, then `cd` to the path it prints last), unless the repo's instructions prescribe a different worktree recipe. Do not make task changes directly in the primary checkout.
 
 Before writing code, read the coding standards the reviewer will hold the work to: the standards sources and smell baseline in step 3 of the `code-review` skill (`../code-review/SKILL.md`, relative to this skill's folder). Read that step only; review runs later. Write to those standards from the first slice.
 
@@ -26,4 +26,4 @@ Once done, load the `code-review` skill (on Claude Code, call the Skill tool wit
 
 Commit each review fix as its own save point, then push the branch, load the `pr` skill (on Claude Code, call the Skill tool with "pr"; elsewhere, read its `SKILL.md`) to shape the PR body, include the ticket's closing keyword where the tracker supports one (e.g. `Closes #N`), and open the PR. Skip or adjust this step if the user says otherwise (e.g. no PR wanted).
 
-End with the **Noticed, not touched** list (if any), then a brief FYI: `/cleanup-merged-worktree` is available once the PR merges, and `/retro` if the session felt bumpy.
+End with the **Noticed, not touched** list (if any), then a brief FYI: once the PR merges, park the slot with `wt.sh park` (or run `/cleanup-free-worktrees` for a worktree outside the slots), and `/retro` if the session felt bumpy.
