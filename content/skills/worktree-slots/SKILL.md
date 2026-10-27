@@ -5,7 +5,7 @@ description: "Worktree slots: reusable numbered git worktrees with warm build ou
 
 Linked worktrees live in numbered **slots** beside the primary checkout: `~/dev/foo` gets `~/dev/foo-wt-00`, `~/dev/foo-wt-01` and so on. A slot's path never changes, so its build output stays configured and warm when a later branch reuses it.
 
-Run the `wt.sh` beside this file, from anywhere inside the repository (the primary checkout or any worktree), e.g. `~/.claude/skills/worktree-slots/wt.sh take my-branch` (`~/.agents/skills/worktree-slots/wt.sh` on Pi and Codex).
+Run `scripts/wt.sh` in this skill's folder, from anywhere inside the repository (the primary checkout or any worktree), e.g. `~/.claude/skills/worktree-slots/scripts/wt.sh take my-branch` (`~/.agents/skills/worktree-slots/scripts/wt.sh` on Pi and Codex).
 
 ## Slot states
 

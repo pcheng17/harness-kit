@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = SOURCE_ROOT / "content/skills/worktree-slots/wt.sh"
+SCRIPT = SOURCE_ROOT / "content/skills/worktree-slots/scripts/wt.sh"
 HARNESS = SOURCE_ROOT / "tests/worktree_slots/run.sh"
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Slot-based worktree allocation. See SKILL.md beside this script.
+# Slot-based worktree allocation. See ../SKILL.md.
 #
 # Usage: wt.sh take <branch> | park [path] | list | prune [--keep k]
 #

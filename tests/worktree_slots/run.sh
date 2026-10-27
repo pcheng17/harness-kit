@@ -5,7 +5,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE="$(realpath "${1:-$HERE/../../content/skills/worktree-slots/wt.sh}")"
+SOURCE="$(realpath "${1:-$HERE/../../content/skills/worktree-slots/scripts/wt.sh}")"
 export PATH="$HERE/bin:$PATH"
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
