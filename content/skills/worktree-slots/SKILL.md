@@ -19,14 +19,9 @@ A branch counts as merged only when `gh` reports a merged PR for it (squash merg
 
 ## Subcommands
 
-- `take <branch>` puts the branch in a slot and prints the slot path on the last line of stdout. It reuses the lowest free slot, then the lowest done slot, and otherwise creates the lowest missing slot, cloning submodules from the primary checkout. A new branch starts at `origin/main`; an existing local branch is checked out as it is; a branch already checked out somewhere just prints that path. The slot is locked with the branch name as the reason.
-- `park [path]` frees a slot (default: the one you are in): it detaches at `origin/main` and unlocks, keeping the local branch. It refuses the primary checkout and a tree with uncommitted changes.
-- `list` shows each slot with its branch, lock reason, uncommitted changes and PR state.
+- `take <branch>` puts the branch in a slot and prints the slot path on the last line of stdout; `cd` there to work. It reuses the lowest free slot, then the lowest done slot, and otherwise creates the lowest missing slot, cloning submodules from the primary checkout. A new branch starts at `origin/main`; an existing local branch is checked out as it is; a branch already checked out somewhere just prints that path. The slot is locked with the branch name as the reason.
+- `park [path]` frees a slot (default: the one you are in) once its PR is merged or the work is abandoned, so the next `take` can reuse it: it detaches at `origin/main` and unlocks, keeping the local branch. It refuses the primary checkout and a tree with uncommitted changes.
 - `prune [--keep k]` reclaims disk. It removes free and done slots, highest-numbered first, keeping the lowest `k` free ones. It also removes **legacy** worktrees (any other linked worktree that is a sibling of the primary checkout, such as an older `../<repo>-<branch>`) that are unlocked, clean and on a branch whose PR is merged, and prints why it keeps each other one; `--keep` does not apply to them. It deletes only local branches whose PR is merged and lists the other branches not checked out anywhere. Other worktrees are never touched.
-
-## Working in a slot
-
-`cd` to the path `take` prints and work there. Park the slot with `wt.sh park` once the PR is merged or the work is abandoned, so the next `take` can reuse it.
 
 ## Per-repo setup hook
 

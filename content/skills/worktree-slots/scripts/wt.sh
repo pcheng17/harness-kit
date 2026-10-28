@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # Slot-based worktree allocation. See ../SKILL.md.
 #
-# Usage: wt.sh take <branch> | park [path] | list | prune [--keep k]
-#
 # Linked worktrees live in fixed slots at ../<primary>-wt-<kk> beside the primary checkout, so a
 # slot's build output stays warm when a later branch reuses it. A slot is free (detached, unlocked,
 # clean), done (on a branch whose PR is merged, unlocked, clean) or busy (anything else). Only prune
@@ -30,7 +28,7 @@ die() {
 find_primary() {
     primary="$(git -C "$1" worktree list --porcelain | sed -n '1s/^worktree //p')"
     [ -n "$primary" ] || die "$1 is not inside a git repository"
-    slot_prefix="$(dirname "$primary")/$(basename "$primary")-wt-"
+    slot_prefix="$primary-wt-"
 }
 
 slot_path() {
@@ -38,8 +36,8 @@ slot_path() {
 }
 
 # Prints "<k> <path> <branch or empty> <locked: 0/1> <lock reason>" for each linked worktree directly
-# beside the primary checkout (a sibling directory), where k is the slot number, or -1 for a legacy (non-slot) worktree. Fields
-# are separated by \x1f, which unlike a tab keeps empty fields under read.
+# beside the primary checkout (a sibling directory), where k is the slot number, or -1 for a legacy
+# (non-slot) worktree. Fields are separated by \x1f, which unlike a tab keeps empty fields under read.
 linked_worktrees() {
     git -C "$primary" worktree list --porcelain | awk -v primary="$primary" -v parent="$(dirname "$primary")/" -v prefix="$slot_prefix" '
         function flush() {
@@ -84,11 +82,8 @@ check_gh() {
 # UNKNOWN when gh is unavailable.
 pr_state() {
     local states
-    if [ "$gh_ok" -eq 0 ]; then
-        echo UNKNOWN
-        return
-    fi
-    if ! states="$(cd "$primary" && gh pr list --state all --head "$1" --json state --jq '.[].state')"; then
+    if [ "$gh_ok" -eq 0 ] ||
+        ! states="$(cd "$primary" && gh pr list --state all --head "$1" --json state --jq '.[].state')"; then
         echo UNKNOWN
         return
     fi
@@ -257,7 +252,11 @@ list() {
             is_dirty "$path" && dirty=yes
             pr=-
             [ -n "$branch" ] && pr="$(pr_state "$branch")"
-            [ "$locked" -eq 1 ] && reason="${reason:-yes}" || reason=-
+            if [ "$locked" -eq 1 ]; then
+                reason="${reason:-yes}"
+            else
+                reason=-
+            fi
             printf '%02d\t%s\t%s\t%s\t%s\t%s\n' "$k" "$path" "${branch:-free}" "$reason" "$dirty" "$pr"
         done < <(slots)
     } | column -t -s $'\t'
