@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Stub gh: PR states come from $GH_STUB_DIR/<branch with / as ->, one state per line.
+set -euo pipefail
+echo "gh $*" >>"$GH_STUB_DIR/calls"
+case "$1 ${2:-}" in
+    "auth status") [ -z "${GH_STUB_UNAUTH:-}" ] || { echo "not logged in" >&2; exit 1; }; exit 0 ;;
+    "pr list")
+        head=""
+        while [ $# -gt 0 ]; do [ "$1" = --head ] && head="$2"; shift; done
+        f="$GH_STUB_DIR/${head//\//-}"
+        [ -f "$f" ] && cat "$f"
+        exit 0 ;;
+esac
+echo "stub gh: unsupported: $*" >&2
+exit 1
