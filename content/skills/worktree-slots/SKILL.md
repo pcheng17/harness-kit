@@ -5,6 +5,8 @@ description: "Worktree slots: reusable numbered git worktrees with warm build ou
 
 Linked worktrees live in numbered **slots** beside the primary checkout: `~/dev/foo` gets `~/dev/foo-wt-00`, `~/dev/foo-wt-01` and so on. A slot's path never changes, so its build output stays configured and warm when a later branch reuses it.
 
+In a bare layout (a bare git dir such as `~/dev/foo/.bare` or `~/dev/foo.git` with worktrees beside it), slots sit beside the bare dir and take the repository's name: `~/dev/foo/foo-wt-00` or `~/dev/foo-wt-00`. The bare dir stands in for the primary checkout but is never a slot or legacy worktree, and slots fetch submodules from their `.gitmodules` remotes.
+
 Run `scripts/wt.sh` in this skill's folder, from anywhere inside the repository (the primary checkout or any worktree), e.g. `~/.claude/skills/worktree-slots/scripts/wt.sh take my-branch` (`~/.agents/skills/worktree-slots/scripts/wt.sh` on Pi and Codex).
 
 ## Slot states
@@ -19,9 +21,13 @@ A branch counts as merged only when `gh` reports a merged PR for it (squash merg
 
 ## Subcommands
 
-- `take <branch>` puts the branch in a slot and prints the slot path on the last line of stdout; `cd` there to work. It reuses the lowest free slot, then the lowest done slot, and otherwise creates the lowest missing slot, cloning submodules from the primary checkout. A branch only on origin is checked out tracking `origin/<branch>`, and a new branch starts at `origin/main`. An existing local branch is fast-forwarded to `origin/<branch>` when strictly behind it and is otherwise checked out as it is, with a warning if the two have diverged. A branch already checked out somewhere just prints that path. The slot is locked with the branch name as the reason.
-- `park [path]` frees a slot (default: the one you are in) as soon as its PR is opened or the work is abandoned, so the next `take` can reuse it: it detaches at `origin/main` and unlocks, keeping the local branch. Park your own slots without waiting to be asked; to return to the branch later, `take` it again. It refuses the primary checkout and a tree with uncommitted changes.
+- `take <branch>` puts the branch in a slot and prints the slot path on the last line of stdout; `cd` there to work. It reuses the lowest free slot, then the lowest done slot, and otherwise creates the lowest missing slot, cloning submodules from the primary checkout. A branch only on origin is checked out tracking `origin/<branch>`, and a new branch starts at `origin/<base>`. An existing local branch is fast-forwarded to `origin/<branch>` when strictly behind it and is otherwise checked out as it is, with a warning if the two have diverged. A branch already checked out somewhere just prints that path. The slot is locked with the branch name as the reason.
+- `park [path]` frees a slot (default: the one you are in) as soon as its PR is opened or the work is abandoned, so the next `take` can reuse it: it detaches at `origin/<base>` and unlocks, keeping the local branch. Park your own slots without waiting to be asked; to return to the branch later, `take` it again. It refuses the primary checkout and a tree with uncommitted changes.
 - `prune [--keep k]` reclaims disk. It removes free and done slots, highest-numbered first, keeping the lowest `k` free ones. It also removes **legacy** worktrees (any other linked worktree that is a sibling of the primary checkout, such as an older `../<repo>-<branch>`) that are unlocked, clean and on a branch whose PR is merged, and prints why it keeps each other one; `--keep` does not apply to them. It deletes only local branches whose PR is merged and lists the other branches not checked out anywhere. Other worktrees are never touched.
+
+## Base branch
+
+The base is origin's default branch, read from `origin/HEAD` or else asked of origin. Set `WT_BASE_BRANCH` to override it, e.g. when a repo's PRs target another branch. `prune` never removes a slot or legacy worktree on the base branch.
 
 ## Per-repo setup hook
 

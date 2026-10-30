@@ -9,6 +9,10 @@ set -euo pipefail
 
 primary=""
 slot_prefix=""
+# 1 when the primary is a bare git dir rather than a checkout.
+primary_bare=0
+# The branch new branches start from and park detaches at; see resolve_base.
+base=""
 # Total slot disk use, in GiB, above which creating a slot and list print a warning.
 warn_gib="${WT_WARN_GIB:-100}"
 
@@ -24,11 +28,48 @@ die() {
 
 [[ "$warn_gib" =~ ^[0-9]+$ ]] || die "WT_WARN_GIB must be a whole number of GiB"
 
-# Finds the primary checkout from any worktree of the repository containing <dir>.
+# Finds the primary checkout from any worktree of the repository containing <dir>: git's first
+# worktree entry. In a bare layout that entry is the bare git dir, which has no work tree, so slots
+# beside it are named after the repository instead: <name> for <name>.git, or the parent directory's
+# name for a dot-named dir such as .bare.
 find_primary() {
-    primary="$(git -C "$1" worktree list --porcelain | sed -n '1s/^worktree //p')"
+    local entry name
+    entry="$(git -C "$1" worktree list --porcelain | sed -n '1,2p')"
+    primary="$(sed -n '1s/^worktree //p' <<<"$entry")"
     [ -n "$primary" ] || die "$1 is not inside a git repository"
     slot_prefix="$primary-wt-"
+    if [ "$(sed -n 2p <<<"$entry")" = bare ]; then
+        primary_bare=1
+        name="$(basename "$primary" .git)"
+        case "$name" in "" | .*) name="$(basename "$(dirname "$primary")")" ;; esac
+        slot_prefix="$(dirname "$primary")/$name-wt-"
+    fi
+}
+
+# Sets base to WT_BASE_BRANCH, or else origin's default branch: origin/HEAD when the clone recorded
+# it, otherwise asking origin. Fails when neither knows.
+resolve_base() {
+    base="${WT_BASE_BRANCH:-}"
+    if [ -n "$base" ]; then
+        git check-ref-format --branch "$base" >/dev/null 2>&1 || die "WT_BASE_BRANCH '$base' is not a valid branch name"
+        return
+    fi
+    base="$(git -C "$primary" symbolic-ref --quiet refs/remotes/origin/HEAD || true)"
+    base="${base#refs/remotes/origin/}"
+    if [ -z "$base" ]; then
+        base="$(git -C "$primary" ls-remote --symref origin HEAD |
+            awk '$1 == "ref:" && $3 == "HEAD" { sub(/^refs\/heads\//, "", $2); print $2 }' || true)"
+    fi
+    [ -n "$base" ]
+}
+
+need_base() {
+    resolve_base || die "cannot find origin's default branch; set WT_BASE_BRANCH to the branch to start from"
+}
+
+# Fetches origin/<base>. The explicit refspec updates it even under a narrow fetch config.
+fetch_base() {
+    git -C "$primary" fetch origin "+refs/heads/$base:refs/remotes/origin/$base"
 }
 
 slot_path() {
@@ -98,14 +139,14 @@ pr_state() {
     fi
 }
 
-# Prints free, done or busy for one slot.
+# Prints free, done or busy for one slot. A slot on the base branch is busy, so its branch is never deleted.
 slot_state() {
     local path="$1" branch="$2" locked="$3"
     if [ "$locked" -eq 1 ] || is_dirty "$path"; then
         echo busy
     elif [ -z "$branch" ]; then
         echo free
-    elif [ "$(pr_state "$branch")" = MERGED ]; then
+    elif [ "$branch" != "$base" ] && [ "$(pr_state "$branch")" = MERGED ]; then
         echo "done"
     else
         echo busy
@@ -124,15 +165,18 @@ warn_disk_use() {
 
 # Checks out the submodule commits a worktree's HEAD records, fetching from the primary checkout's
 # clones rather than the .gitmodules remote, which may be unreachable (e.g. no SSH key for GitHub).
+# A bare primary has no clones, so there the .gitmodules remote is used.
 update_submodules() {
     local path="$1" key sub_path name
     shift
     local url_overrides=()
-    while read -r key sub_path; do
-        name="${key#submodule.}"
-        name="${name%.path}"
-        url_overrides+=(-c "submodule.$name.url=$primary/$sub_path")
-    done < <(git config -f "$path/.gitmodules" --get-regexp '^submodule\..*\.path$' || true)
+    if [ "$primary_bare" -eq 0 ]; then
+        while read -r key sub_path; do
+            name="${key#submodule.}"
+            name="${name%.path}"
+            url_overrides+=(-c "submodule.$name.url=$primary/$sub_path")
+        done < <(git config -f "$path/.gitmodules" --get-regexp '^submodule\..*\.path$' || true)
+    fi
     # Git refuses a local-path submodule URL over the file transport by default.
     # The +-guard keeps an empty array legal under set -u on bash older than 4.4 (stock macOS).
     git -C "$path" -c protocol.file.allow=always ${url_overrides[@]+"${url_overrides[@]}"} submodule update "$@" --recursive
@@ -178,9 +222,10 @@ take() {
 
     {
         check_gh
-        git -C "$primary" fetch origin main
+        need_base
+        fetch_base
         # Asking origin directly ignores a stale origin/<branch> whose remote branch is gone; exit 2
-        # means absent, anything else nonzero is a failure, not a reason to fork from main.
+        # means absent, anything else nonzero is a failure, not a reason to fork from the base.
         git -C "$primary" ls-remote --exit-code origin "refs/heads/$branch" >/dev/null || rc=$?
         case "$rc" in
             0) remote_exists=1 ;;
@@ -193,7 +238,9 @@ take() {
                 die "cannot fetch $branch from origin"
         fi
         # Submodules clone from the primary checkout's clones, so refresh those first.
-        git -C "$primary" submodule foreach --quiet 'git fetch --quiet origin'
+        if [ "$primary_bare" -eq 0 ]; then
+            git -C "$primary" submodule foreach --quiet 'git fetch --quiet origin'
+        fi
         if git -C "$primary" show-ref --verify --quiet "refs/heads/$branch"; then
             branch_exists=1
         fi
@@ -226,7 +273,7 @@ take() {
                 git -C "$chosen" checkout --no-track -b "$branch" "refs/remotes/origin/$branch"
                 track_origin "$branch"
             else
-                git -C "$chosen" checkout -b "$branch" refs/remotes/origin/main
+                git -C "$chosen" checkout -b "$branch" "refs/remotes/origin/$base"
             fi
             update_submodules "$chosen"
             if [ -n "$chosen_branch" ]; then
@@ -249,7 +296,7 @@ take() {
                 git -C "$primary" worktree add --no-track -b "$branch" "$chosen" "refs/remotes/origin/$branch"
                 track_origin "$branch"
             else
-                git -C "$primary" worktree add -b "$branch" "$chosen" refs/remotes/origin/main
+                git -C "$primary" worktree add -b "$branch" "$chosen" "refs/remotes/origin/$base"
             fi
             update_submodules "$chosen" --init
             warn_disk_use
@@ -274,7 +321,7 @@ worktree_root() {
     echo "$root"
 }
 
-# Detaches a slot at origin/main and unlocks it, leaving its branch alone.
+# Detaches a slot at origin/<base> and unlocks it, leaving its branch alone.
 park() {
     local path="$1" k slot locked found=""
     [ "$path" != "$primary" ] || die "refusing to park the primary checkout"
@@ -284,8 +331,9 @@ park() {
     [ -n "$found" ] || die "$path is not a worktree slot"
     ! is_dirty "$path" || die "$path has uncommitted changes"
 
-    git -C "$primary" fetch origin main
-    git -C "$path" checkout --detach refs/remotes/origin/main
+    need_base
+    fetch_base
+    git -C "$path" checkout --detach "refs/remotes/origin/$base"
     update_submodules "$path"
     if [ "$found" -eq 1 ]; then
         git -C "$primary" worktree unlock "$path"
@@ -320,10 +368,15 @@ prune() {
     local keep=0 k path branch locked state kept=0 left i reason
     local paths=() branches=()
     if [ $# -gt 0 ]; then
-        [ "$1" = --keep ] && [ $# -eq 2 ] && [[ "$2" =~ ^[0-9]+$ ]] || usage
+        if [ "$1" != --keep ] || [ $# -ne 2 ] || [[ ! "$2" =~ ^[0-9]+$ ]]; then usage; fi
         keep="$2"
     fi
     check_gh
+    # Without a resolvable base, the primary's HEAD branch is the one to protect.
+    if ! resolve_base; then
+        base="$(git -C "$primary" symbolic-ref --quiet HEAD || true)"
+        base="${base#refs/heads/}"
+    fi
 
     while IFS=$'\x1f' read -r k path branch locked _; do
         state="$(slot_state "$path" "$branch" "$locked")"
@@ -349,6 +402,8 @@ prune() {
             reason="uncommitted changes"
         elif [ -z "$branch" ]; then
             reason=detached
+        elif [ "$branch" = "$base" ]; then
+            reason="base branch"
         elif state="$(pr_state "$branch")" && [ "$state" != MERGED ]; then
             reason="PR $state"
         else
@@ -373,7 +428,7 @@ prune() {
     done
 
     left="$(git -C "$primary" for-each-ref --format='%(refname:short)%09%(worktreepath)' refs/heads |
-        awk -F'\t' '$2 == "" && $1 != "main" { print "  " $1 }')"
+        awk -F'\t' -v base="$base" '$2 == "" && $1 != base { print "  " $1 }')"
     if [ -n "$left" ]; then
         echo "Local branches not checked out in any worktree (left alone):"
         echo "$left"
@@ -387,6 +442,8 @@ case "$command" in
     take) [ $# -eq 1 ] || usage; find_primary .; take "$1" ;;
     park)
         [ $# -le 1 ] || usage
+        [ "$(git -C "${1:-.}" rev-parse --is-bare-repository 2>/dev/null)" != true ] ||
+            die "refusing to park the bare git dir"
         root="$(worktree_root "${1:-.}")"
         find_primary "$root"
         park "$root"

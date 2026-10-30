@@ -478,5 +478,147 @@ check "slot named after the primary" [ "$out" = "$N/plain-wt-00" ]
 (cd "$out" && "$SCRIPT" park >/dev/null 2>&1); rc=$?
 check "park without submodules succeeds" [ $rc -eq 0 ]
 
+# Fresh universe, with its own gh stub state and script copy, whose origin has default branch master
+# and a develop branch. The primary clone is at $M/dev/proj, with origin/HEAD set by the clone.
+master_universe() {
+    M="$(mktemp -d "${TMPDIR:-/tmp}/wt-slots-test.XXXXXX")"
+    universes+=("$M")
+    export GH_STUB_DIR="$M/gh"
+    mkdir -p "$GH_STUB_DIR"
+    cp "$SOURCE" "$M/wt.sh"
+    SCRIPT="$M/wt.sh"
+    git init -q --bare -b master "$M/origin.git"
+    git clone -q "$M/origin.git" "$M/seed" 2>/dev/null
+    git -C "$M/seed" commit -q --allow-empty -m init
+    git -C "$M/seed" push -q origin master
+    git -C "$M/seed" push -q origin "$(git -C "$M/seed" commit-tree -p master -m develop 'master^{tree}'):refs/heads/develop"
+    git -C "$M/seed" fetch -q origin
+    git clone -q "$M/origin.git" "$M/dev/proj" 2>/dev/null
+    MP="$M/dev/proj"
+}
+mslot() { echo "$M/dev/proj-wt-$1"; }
+mtake() { (cd "$MP" && "$SCRIPT" take "$@"); }
+mrev() { git -C "$1" rev-parse "$2"; }
+# Advances <branch> on origin from the seed clone, so the primary has not fetched it, and prints it.
+madvance() {
+    local c
+    c="$(git -C "$M/seed" commit-tree -p "origin/$1" -m "advance $1" "origin/$1^{tree}")"
+    git -C "$M/seed" push -q origin "$c:refs/heads/$1"
+    git -C "$M/seed" fetch -q origin
+    echo "$c"
+}
+
+echo "== a repository whose default branch is master, with origin/HEAD set"
+master_universe
+check "setup: origin/HEAD is origin/master" [ "$(git -C "$MP" symbolic-ref --short refs/remotes/origin/HEAD)" = origin/master ]
+c="$(madvance master)"
+out="$(mtake feat/a 2>"$M/err")"; rc=$?
+check "take succeeds" [ $rc -eq 0 ]
+check "slot 00 created" [ "$(tail -n1 <<<"$out")" = "$(mslot 00)" ]
+check "new branch starts at the fetched origin/master" [ "$(mrev "$(mslot 00)" HEAD)" = "$c" ]
+c="$(madvance master)"
+(cd "$(mslot 00)" && "$SCRIPT" park >/dev/null 2>"$M/err"); rc=$?
+check "park succeeds" [ $rc -eq 0 ]
+check "parked at the fetched origin/master" [ "$(mrev "$(mslot 00)" HEAD)" = "$c" ]
+check "parked detached" [ "$(head_branch "$(mslot 00)")" = detached ]
+git -C "$MP" branch -q origin/master master   # makes symbolic-ref --short say remotes/origin/master
+out="$(mtake feat/z 2>/dev/null)"; rc=$?
+check "a local branch named origin/master does not confuse the base" [ $rc -eq 0 ]
+(cd "$(mslot 00)" && "$SCRIPT" park >/dev/null 2>&1)
+git -C "$MP" branch -q -D origin/master
+
+echo "== a repository whose default branch is master, without origin/HEAD"
+git -C "$MP" remote set-head origin -d
+c="$(madvance master)"
+out="$(mtake feat/b 2>/dev/null)"; rc=$?
+check "take succeeds via ls-remote" [ $rc -eq 0 ]
+check "new branch starts at origin/master" [ "$(mrev "$(tail -n1 <<<"$out")" HEAD)" = "$c" ]
+(cd "$(mslot 00)" && "$SCRIPT" park >/dev/null 2>&1); rc=$?
+check "park succeeds via ls-remote" [ $rc -eq 0 ]
+check "parked at origin/master" [ "$(mrev "$(mslot 00)" HEAD)" = "$c" ]
+mkdir -p "$M/gitstub"
+printf '#!/usr/bin/env bash\ncase " $* " in *" $FAIL_GIT "*) exit 128 ;; esac\nPATH="${PATH#%q:}" exec git "$@"\n' \
+    "$M/gitstub" >"$M/gitstub/git"
+chmod +x "$M/gitstub/git"
+out="$(PATH="$M/gitstub:$PATH" FAIL_GIT=--symref mtake feat/c 2>"$M/err")"; rc=$?
+check "unresolvable default branch fails take" [ $rc -ne 0 ]
+check "failure names WT_BASE_BRANCH" grep -q WT_BASE_BRANCH "$M/err"
+check "unresolvable default branch creates no branch" not git -C "$MP" rev-parse -q --verify refs/heads/feat/c
+(cd "$MP" && PATH="$M/gitstub:$PATH" FAIL_GIT=--symref "$SCRIPT" list >/dev/null 2>&1); rc=$?
+check "list needs no default branch" [ $rc -eq 0 ]
+
+echo "== WT_BASE_BRANCH overrides origin's default branch, under a fetch config that maps only master"
+git -C "$MP" remote set-head origin master
+git -C "$MP" config remote.origin.fetch '+refs/heads/master:refs/remotes/origin/master'
+c="$(madvance develop)"
+out="$(WT_BASE_BRANCH=develop mtake feat/d 2>/dev/null)"; rc=$?
+check "take succeeds" [ $rc -eq 0 ]
+check "new branch starts at the fetched origin/develop" [ "$(mrev "$(tail -n1 <<<"$out")" HEAD)" = "$c" ]
+c="$(madvance develop)"
+(cd "$(mslot 00)" && WT_BASE_BRANCH=develop "$SCRIPT" park >/dev/null 2>&1); rc=$?
+check "park succeeds" [ $rc -eq 0 ]
+check "parked at the fetched origin/develop" [ "$(mrev "$(mslot 00)" HEAD)" = "$c" ]
+out="$(WT_BASE_BRANCH='bad..name' mtake feat/e 2>"$M/err")"; rc=$?
+check "invalid WT_BASE_BRANCH fails take" [ $rc -ne 0 ]
+check "invalid WT_BASE_BRANCH is named" grep -q WT_BASE_BRANCH "$M/err"
+
+echo "== a bare primary with sibling worktrees, default branch master, with a submodule"
+master_universe
+git -C "$M/seed" -c protocol.file.allow=always submodule add -q "$T/proto.git" extern/proto 2>/dev/null
+git -C "$M/seed" commit -q -m sub
+git -C "$M/seed" push -q origin master
+# The usual bare-worktree recipe: a bare clone given remote-tracking refs and origin/HEAD.
+B="$M/ge"
+git clone -q --bare "$M/origin.git" "$B/.bare" 2>/dev/null
+git -C "$B/.bare" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+git -C "$B/.bare" fetch -q origin
+git -C "$B/.bare" remote set-head origin -a >/dev/null
+git -C "$B/.bare" worktree add -q "$B/legacy" -b legacy/x origin/master 2>/dev/null
+git -C "$B/.bare" branch -q stray origin/master
+# The base branch's worktree is a legacy worktree here; a PR merged from a branch named master must
+# not get it pruned.
+git -C "$B/.bare" worktree add -q "$B/master" master 2>/dev/null
+merged master
+bslot() { echo "$B/ge-wt-$1"; }
+out="$(cd "$B/.bare" && "$SCRIPT" take feat/a 2>"$M/err")"; rc=$?
+check "take from the bare dir succeeds" [ $rc -eq 0 ]
+check "slot named after the bare dir's parent" [ "$(tail -n1 <<<"$out")" = "$(bslot 00)" ]
+check "no slot named after .bare" [ ! -e "$B/.bare-wt-00" ]
+check "on feat/a at origin/master" [ "$(mrev "$(bslot 00)" HEAD)" = "$(mrev "$B/.bare" refs/remotes/origin/master)" ]
+check "locked" bash -c 'git -C "$1" worktree list --porcelain | awk -v p="$2" "\$1==\"worktree\"{w=\$2} \$1==\"locked\" && w==p{f=1} END{exit !f}"' _ "$B/.bare" "$(bslot 00)"
+check "submodule checked out" [ -e "$(bslot 00)/extern/proto/.git" ]
+out="$(cd "$B/legacy" && "$SCRIPT" take feat/b 2>/dev/null)"; rc=$?
+check "take from a sibling worktree succeeds" [ $rc -eq 0 ]
+check "second slot is 01" [ "$(tail -n1 <<<"$out")" = "$(bslot 01)" ]
+(cd "$(bslot 01)" && "$SCRIPT" park >/dev/null 2>&1); rc=$?
+check "park succeeds" [ $rc -eq 0 ]
+check "parked detached at origin/master" [ "$(mrev "$(bslot 01)" HEAD)" = "$(mrev "$B/.bare" refs/remotes/origin/master)" ]
+check "parked slot clean" [ -z "$(git -C "$(bslot 01)" status --porcelain --ignore-submodules=none)" ]
+(cd "$B/.bare" && "$SCRIPT" park "$B/.bare" >/dev/null 2>"$M/err"); rc=$?
+check "park refuses the bare dir" [ $rc -ne 0 ]
+check "park names the bare dir" grep -q "refusing to park the bare git dir" "$M/err"
+out="$(cd "$B/.bare" && "$SCRIPT" list 2>/dev/null)"; rc=$?
+check "list succeeds" [ $rc -eq 0 ]
+check "list shows both slots" bash -c 'grep -q "ge-wt-00" <<<"$1" && grep -q "ge-wt-01" <<<"$1"' _ "$out"
+check "list omits the bare dir and legacy worktree" not grep -qE '\.bare|legacy' <<<"$out"
+out="$(cd "$B/.bare" && "$SCRIPT" prune 2>&1)"; rc=$?
+check "prune succeeds" [ $rc -eq 0 ]
+check "prune removes the free slot" [ ! -e "$(bslot 01)" ]
+check "prune keeps the busy slot" [ -d "$(bslot 00)" ]
+check "prune keeps the legacy worktree, saying why" grep -q "Kept $B/legacy: PR NONE" <<<"$out"
+check "prune keeps the base branch's worktree, saying why" grep -q "Kept $B/master: base branch" <<<"$out"
+check "prune keeps the base branch" git -C "$B/.bare" rev-parse -q --verify refs/heads/master
+check "prune never mentions the bare dir" not grep -q '\.bare' <<<"$out"
+check "prune lists the stray branch" grep -q '^  stray$' <<<"$out"
+check "prune leaves the default branch unlisted" not grep -q '^  master$' <<<"$out"
+
+echo "== a bare primary named <repo>.git names slots <repo>-wt-NN"
+git clone -q --bare "$M/origin.git" "$M/dev/foo.git" 2>/dev/null
+git -C "$M/dev/foo.git" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+git -C "$M/dev/foo.git" fetch -q origin
+out="$(cd "$M/dev/foo.git" && "$SCRIPT" take feat/a 2>/dev/null)"; rc=$?
+check "take succeeds" [ $rc -eq 0 ]
+check "slot named foo-wt-00" [ "$(tail -n1 <<<"$out")" = "$M/dev/foo-wt-00" ]
+
 echo
 if [ $fails -eq 0 ]; then echo "ALL PASSED"; rm -rf "${universes[@]}"; else echo "$fails FAILED (kept ${universes[*]})"; exit 1; fi
