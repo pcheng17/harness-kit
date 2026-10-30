@@ -13,16 +13,9 @@ from typing import Any
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = SOURCE_ROOT / "content/claude/statusline.sh"
 
-ESC = "\033"
-RST = f"{ESC}[0m"
-GRAY = f"{ESC}[90m"
-SEP = f"{GRAY} | {RST}"
-DOT = f"{GRAY} · {RST}"
+SEP = " | "
+DOT = " · "
 LIMITS = f"5h 23%{DOT}7d 41%"
-GIT_GREEN = f"{ESC}[38;5;76m"
-GIT_YELLOW = f"{ESC}[38;5;178m"
-GIT_BLUE = f"{ESC}[38;5;39m"
-GIT_RED = f"{ESC}[38;5;196m"
 ICON = "\uf419"
 
 
@@ -87,6 +80,7 @@ class StatuslineTests(unittest.TestCase):
         self.assertEqual(result.stderr, "")
         self.assertTrue(result.stdout.endswith("\n"))
         self.assertEqual(result.stdout.count("\n"), 1, result.stdout)
+        self.assertNotIn("\033", result.stdout)
         return result.stdout[:-1]
 
     def git_segment(self, **overrides: Any) -> str:
@@ -108,14 +102,14 @@ class StatuslineTests(unittest.TestCase):
         line = self.run_statusline(context_window={"used_percentage": 64.9})
         self.assertEqual(
             line,
-            f"{GIT_GREEN}{ICON} main {GIT_GREEN}⇡2 {GIT_YELLOW}+1 {GIT_YELLOW}!3 {GIT_BLUE}?1{RST}"
+            f"{ICON} main ⇡2 +1 !3 ?1"
             f"{SEP}Opus 5.5 (1M context){DOT}medium"
             f"{SEP}64% context used"
             f"{SEP}{LIMITS}",
         )
 
     def test_clean_branch(self) -> None:
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main{RST}")
+        self.assertEqual(self.git_segment(), f"{ICON} main")
 
     def test_staged_unstaged_and_untracked_counts(self) -> None:
         self.commit("other.txt", "one\n")
@@ -130,18 +124,18 @@ class StatuslineTests(unittest.TestCase):
         (self.repo / "ignored.txt").write_text("ignored\n")
         self.assertEqual(
             self.git_segment(),
-            f"{GIT_GREEN}{ICON} main {GIT_YELLOW}+2 {GIT_YELLOW}!1 {GIT_BLUE}?4{RST}",
+            f"{ICON} main +2 !1 ?4",
         )
 
     def test_file_both_staged_and_unstaged_counts_twice(self) -> None:
         (self.repo / "tracked.txt").write_text("staged\n")
         self.git("add", "tracked.txt")
         (self.repo / "tracked.txt").write_text("staged then edited\n")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_YELLOW}+1 {GIT_YELLOW}!1{RST}")
+        self.assertEqual(self.git_segment(), f"{ICON} main +1 !1")
 
     def test_renamed_file_counts_as_staged(self) -> None:
         self.git("mv", "tracked.txt", "renamed.txt")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_YELLOW}+1{RST}")
+        self.assertEqual(self.git_segment(), f"{ICON} main +1")
 
     def test_conflicts(self) -> None:
         self.git("checkout", "-q", "-b", "other")
@@ -149,7 +143,7 @@ class StatuslineTests(unittest.TestCase):
         self.git("checkout", "-q", "main")
         self.commit("tracked.txt", "main\n")
         self.git("merge", "-q", "other", check=False)
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_RED}~1{RST}")
+        self.assertEqual(self.git_segment(), f"{ICON} main ~1")
 
     def test_ahead_and_behind_against_local_bare_remote(self) -> None:
         remote = self.root / "remote.git"
@@ -158,31 +152,31 @@ class StatuslineTests(unittest.TestCase):
         self.git("remote", "add", "origin", str(remote))
         self.git("fetch", "-q", "origin")
         self.git("branch", "-q", "--set-upstream-to=origin/main")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main{RST}")
+        self.assertEqual(self.git_segment(), f"{ICON} main")
 
         self.git("reset", "-q", "--hard", "HEAD~1")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_GREEN}⇣1{RST}")
+        self.assertEqual(self.git_segment(), f"{ICON} main ⇣1")
 
         self.commit("a.txt", "a\n")
         self.commit("b.txt", "b\n")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_GREEN}⇣1{GIT_GREEN}⇡2{RST}")
+        self.assertEqual(self.git_segment(), f"{ICON} main ⇣1⇡2")
 
         self.git("reset", "-q", "--hard", "origin/main")
         self.commit("c.txt", "c\n")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_GREEN}⇡1{RST}")
+        self.assertEqual(self.git_segment(), f"{ICON} main ⇡1")
 
     def test_detached_head_shows_short_oid(self) -> None:
         oid = self.git("rev-parse", "HEAD")
         self.git("checkout", "-q", "--detach")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} @{oid[:8]}{RST}")
+        self.assertEqual(self.git_segment(), f"{ICON} @{oid[:8]}")
 
     def test_long_branch_is_truncated(self) -> None:
         branch = "feature/abcdefghijklmnopqrstuvwxyz-0123456789"
         self.git("checkout", "-q", "-b", branch)
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} {branch[:12]}…{branch[-12:]}{RST}")
+        self.assertEqual(self.git_segment(), f"{ICON} {branch[:12]}…{branch[-12:]}")
         exact = "f" * 32
         self.git("checkout", "-q", "-b", exact)
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} {exact}{RST}")
+        self.assertEqual(self.git_segment(), f"{ICON} {exact}")
 
     def test_non_repository_omits_git_segment(self) -> None:
         outside = self.home / "plain"
@@ -194,7 +188,7 @@ class StatuslineTests(unittest.TestCase):
 
     def test_cwd_fallback_field(self) -> None:
         payload = {"cwd": str(self.repo), "model": {"display_name": "Opus"}}
-        self.assertEqual(self.run_statusline(payload).split(SEP)[0], f"{GIT_GREEN}{ICON} main{RST}")
+        self.assertEqual(self.run_statusline(payload).split(SEP)[0], f"{ICON} main")
 
     def test_context_percentage_is_truncated(self) -> None:
         outside = self.home / "plain"
@@ -312,7 +306,6 @@ class StatuslineTests(unittest.TestCase):
         outside.mkdir()
         segments = self.run_statusline(cwd=outside, model={"display_name": "Opus\x1b[31m\x07\x7fX"}).split(SEP)
         self.assertEqual(segments[0], f"Opus [31m  X{DOT}medium")
-        self.assertNotIn(ESC + "[31m", "".join(segments))
 
     def test_wrong_typed_field_does_not_shift_later_fields(self) -> None:
         outside = self.home / "plain"

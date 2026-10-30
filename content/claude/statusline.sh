@@ -7,15 +7,8 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
-ESC=$'\033'
-RST="${ESC}[0m"
-GRAY="${ESC}[90m"
-SEP="${GRAY} | ${RST}"
-DOT="${GRAY} · ${RST}"
-GIT_GREEN="${ESC}[38;5;76m"
-GIT_YELLOW="${ESC}[38;5;178m"
-GIT_BLUE="${ESC}[38;5;39m"
-GIT_RED="${ESC}[38;5;196m"
+SEP=" | "
+DOT=" · "
 BRANCH_ICON=$'\xef\x90\x99' # U+F419, Nerd Font git branch
 
 # One jq process. Each field is exactly one line: wrong types and missing values
@@ -67,10 +60,10 @@ $git_status
 GIT_STATUS
 
   if [ "$branch" = "(detached)" ]; then
-    git_seg="${GIT_GREEN}${BRANCH_ICON} @${oid:0:8}"
+    git_seg="${BRANCH_ICON} @${oid:0:8}"
   else
     [ "${#branch}" -gt 32 ] && branch="${branch:0:12}…${branch: -12}"
-    git_seg="${GIT_GREEN}${BRANCH_ICON} ${branch}"
+    git_seg="${BRANCH_ICON} ${branch}"
   fi
 
   ahead=0; behind=0
@@ -78,16 +71,15 @@ GIT_STATUS
     ahead="${ab%% *}"; ahead="${ahead#+}"
     behind="${ab##* }"; behind="${behind#-}"
   fi
-  [ "$behind" -gt 0 ] 2>/dev/null && git_seg="${git_seg} ${GIT_GREEN}⇣${behind}"
+  [ "$behind" -gt 0 ] 2>/dev/null && git_seg="${git_seg} ⇣${behind}"
   if [ "$ahead" -gt 0 ] 2>/dev/null; then
     [ "$behind" -gt 0 ] 2>/dev/null || git_seg="${git_seg} "
-    git_seg="${git_seg}${GIT_GREEN}⇡${ahead}"
+    git_seg="${git_seg}⇡${ahead}"
   fi
-  [ "$conflicts" -gt 0 ] && git_seg="${git_seg} ${GIT_RED}~${conflicts}"
-  [ "$staged" -gt 0 ] && git_seg="${git_seg} ${GIT_YELLOW}+${staged}"
-  [ "$unstaged" -gt 0 ] && git_seg="${git_seg} ${GIT_YELLOW}!${unstaged}"
-  [ "$untracked" -gt 0 ] && git_seg="${git_seg} ${GIT_BLUE}?${untracked}"
-  git_seg="${git_seg}${RST}"
+  [ "$conflicts" -gt 0 ] && git_seg="${git_seg} ~${conflicts}"
+  [ "$staged" -gt 0 ] && git_seg="${git_seg} +${staged}"
+  [ "$unstaged" -gt 0 ] && git_seg="${git_seg} !${unstaged}"
+  [ "$untracked" -gt 0 ] && git_seg="${git_seg} ?${untracked}"
 fi
 
 model_seg=""
