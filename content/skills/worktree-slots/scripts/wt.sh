@@ -373,7 +373,10 @@ prune() {
     fi
     check_gh
     # Without a resolvable base, the primary's HEAD branch is the one to protect.
-    resolve_base || base="$(git -C "$primary" symbolic-ref --quiet --short HEAD || true)"
+    if ! resolve_base; then
+        base="$(git -C "$primary" symbolic-ref --quiet HEAD || true)"
+        base="${base#refs/heads/}"
+    fi
 
     while IFS=$'\x1f' read -r k path branch locked _; do
         state="$(slot_state "$path" "$branch" "$locked")"
