@@ -15,5 +15,5 @@
 
 - Do all repository work in a linked worktree, never the primary checkout.
 - Take one with the `worktree-slots` skill: `~/.claude/skills/worktree-slots/scripts/wt.sh take <branch>` (`~/.agents/skills/worktree-slots/scripts/wt.sh` on Pi and Codex), then `cd` to the path printed on the last line.
-- Park it with `wt.sh park` once the PR is merged or the work is abandoned.
+- Park it with `wt.sh park` as soon as its PR is opened (everything committed and pushed) or the work is abandoned. Do not leave parking to the user; to work on the branch again, take a fresh slot.
 - When a repo's `AGENTS.md` prescribes a different worktree recipe, follow the repo.

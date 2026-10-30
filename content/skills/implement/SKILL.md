@@ -24,6 +24,6 @@ Once the suite is green, load the `code-simplification` skill (on Claude Code, c
 
 Once done, load the `code-review` skill (on Claude Code, call the Skill tool with "code-review"; elsewhere, read its `SKILL.md`) and use it to review the work, passing the same fixed point.
 
-Commit each review fix as its own save point, then push the branch, load the `pr` skill (on Claude Code, call the Skill tool with "pr"; elsewhere, read its `SKILL.md`) to shape the PR body, include the ticket's closing keyword where the tracker supports one (e.g. `Closes #N`), and open the PR. Skip or adjust this step if the user says otherwise (e.g. no PR wanted).
+Commit each review fix as its own save point, then push the branch, load the `pr` skill (on Claude Code, call the Skill tool with "pr"; elsewhere, read its `SKILL.md`) to shape the PR body, include the ticket's closing keyword where the tracker supports one (e.g. `Closes #N`), open the PR, then park the slot with `wt.sh park`. Skip or adjust this step if the user says otherwise (e.g. no PR wanted).
 
-End with the **Noticed, not touched** list (if any), then a brief FYI: run `wt.sh park` once the PR merges (`wt.sh prune` reclaims disk), and `/retro` if the session felt bumpy.
+End with the **Noticed, not touched** list (if any), then a brief FYI that you parked the slot (`wt.sh take <branch>` resumes it; `wt.sh prune` reclaims disk), and `/retro` if the session felt bumpy.
