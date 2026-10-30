@@ -15,6 +15,7 @@ SCRIPT = SOURCE_ROOT / "content/claude/statusline.sh"
 ESC = "\033"
 RST = f"{ESC}[0m"
 SEP = f"{ESC}[90m | {RST}"
+DOT = f"{ESC}[90m · {RST}"
 GIT_GREEN = f"{ESC}[38;5;76m"
 GIT_YELLOW = f"{ESC}[38;5;178m"
 GIT_BLUE = f"{ESC}[38;5;39m"
@@ -108,7 +109,7 @@ class StatuslineTests(unittest.TestCase):
         self.assertEqual(
             line,
             f"{GIT_GREEN}{ICON} main {GIT_GREEN}⇡2 {GIT_YELLOW}+1 {GIT_YELLOW}!3 {GIT_BLUE}?1{RST}"
-            f"{SEP}{MAGENTA}Opus 5.5 (1M context), medium{RST}"
+            f"{SEP}{MAGENTA}Opus 5.5 (1M context){DOT}{MAGENTA}medium{RST}"
             f"{SEP}{YELLOW}64%{RST} context used"
             f"{SEP}{ORANGE}$1.23{RST}",
         )
@@ -188,7 +189,7 @@ class StatuslineTests(unittest.TestCase):
         outside.mkdir()
         self.assertEqual(
             self.run_statusline(cwd=outside),
-            f"{MAGENTA}Opus 5.5 (1M context), medium{RST}{SEP}{GREEN}12%{RST} context used{SEP}{ORANGE}$1.23{RST}",
+            f"{MAGENTA}Opus 5.5 (1M context){DOT}{MAGENTA}medium{RST}{SEP}{GREEN}12%{RST} context used{SEP}{ORANGE}$1.23{RST}",
         )
 
     def test_cwd_fallback_field(self) -> None:
@@ -228,7 +229,7 @@ class StatuslineTests(unittest.TestCase):
         outside.mkdir()
         self.assertEqual(
             self.run_statusline(cwd=outside, cost={}),
-            f"{MAGENTA}Opus 5.5 (1M context), medium{RST}{SEP}{GREEN}12%{RST} context used",
+            f"{MAGENTA}Opus 5.5 (1M context){DOT}{MAGENTA}medium{RST}{SEP}{GREEN}12%{RST} context used",
         )
 
     def test_cost_is_formatted_to_cents(self) -> None:
@@ -257,7 +258,7 @@ class StatuslineTests(unittest.TestCase):
         outside = self.root / "plain"
         outside.mkdir()
         segments = self.run_statusline(cwd=outside, model={"display_name": "Opus\x1b[31m\x07\x7fX"}).split(SEP)
-        self.assertEqual(segments[0], f"{MAGENTA}Opus [31m  X, medium{RST}")
+        self.assertEqual(segments[0], f"{MAGENTA}Opus [31m  X{DOT}{MAGENTA}medium{RST}")
         self.assertNotIn(ESC + "[31m", "".join(segments))
 
     def test_wrong_typed_field_does_not_shift_later_fields(self) -> None:
@@ -276,7 +277,7 @@ class StatuslineTests(unittest.TestCase):
         outside = self.root / "plain"
         outside.mkdir()
         segments = self.run_statusline(cwd=outside, model={"display_name": "Opus\nInjected"}).split(SEP)
-        self.assertEqual(segments[0], f"{MAGENTA}Opus Injected, medium{RST}")
+        self.assertEqual(segments[0], f"{MAGENTA}Opus Injected{DOT}{MAGENTA}medium{RST}")
 
     def test_missing_jq_is_reported(self) -> None:
         empty_bin = self.root / "bin"

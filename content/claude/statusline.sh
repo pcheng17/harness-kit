@@ -1,5 +1,5 @@
 #!/bin/bash
-# Claude Code status line: git | model, effort | context | cost.
+# Claude Code status line: git | model · effort | context | cost.
 # Reads session JSON on stdin and prints one line. Runs under macOS bash 3.2.
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -10,6 +10,7 @@ fi
 ESC=$'\033'
 RST="${ESC}[0m"
 SEP="${ESC}[90m | ${RST}"
+DOT="${ESC}[90m · ${RST}"
 GIT_GREEN="${ESC}[38;5;76m"
 GIT_YELLOW="${ESC}[38;5;178m"
 GIT_BLUE="${ESC}[38;5;39m"
@@ -88,7 +89,7 @@ fi
 model_seg=""
 if [ -n "$model" ]; then
   if [ -n "$effort" ]; then
-    model_seg="${MAGENTA}${model}, ${effort}${RST}"
+    model_seg="${MAGENTA}${model}${DOT}${MAGENTA}${effort}${RST}"
   else
     model_seg="${MAGENTA}${model}${RST}"
   fi
