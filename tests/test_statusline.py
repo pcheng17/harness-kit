@@ -23,9 +23,7 @@ GIT_GREEN = f"{ESC}[38;5;76m"
 GIT_YELLOW = f"{ESC}[38;5;178m"
 GIT_BLUE = f"{ESC}[38;5;39m"
 GIT_RED = f"{ESC}[38;5;196m"
-DIR_BLUE = f"{ESC}[0;38;5;31m"
-DIR_SHORT = f"{ESC}[0;38;5;103m"
-DIR_ANCHOR = f"{ESC}[0;1;38;5;39m"
+ICON = "\uf419"
 
 
 @unittest.skipUnless(shutil.which("git") and shutil.which("jq"), "git and jq are required")
@@ -68,7 +66,7 @@ class StatuslineTests(unittest.TestCase):
 
     def run_statusline(
         self, payload: dict[str, Any] | None = None, *, cwd: Path | None = None,
-        environment: dict[str, str] | None = None, keep_dir: bool = False, **overrides: Any,
+        environment: dict[str, str] | None = None, **overrides: Any,
     ) -> str:
         data: dict[str, Any] = {
             "workspace": {"current_dir": str(cwd or self.repo)},
@@ -89,17 +87,7 @@ class StatuslineTests(unittest.TestCase):
         self.assertEqual(result.stderr, "")
         self.assertTrue(result.stdout.endswith("\n"))
         self.assertEqual(result.stdout.count("\n"), 1, result.stdout)
-        output = result.stdout[:-1]
-        return output if keep_dir else self.without_dir(output)
-
-    def without_dir(self, output: str) -> str:
-        """Drop the leading cwd segment so tests of other segments stay independent of it."""
-        for name in ("repo", "plain"):
-            shown = f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_ANCHOR}{name}{RST}"
-            for joiner in (" ", SEP):
-                if output.startswith(shown + joiner):
-                    return output[len(shown + joiner):]
-        return output
+        return result.stdout[:-1]
 
     def git_segment(self, **overrides: Any) -> str:
         return self.run_statusline(**overrides).split(SEP)[0]
@@ -120,67 +108,14 @@ class StatuslineTests(unittest.TestCase):
         line = self.run_statusline(context_window={"used_percentage": 64.9})
         self.assertEqual(
             line,
-            f"{GIT_GREEN}main {GIT_GREEN}⇡2 {GIT_YELLOW}+1 {GIT_YELLOW}!3 {GIT_BLUE}?1{RST}"
+            f"{GIT_GREEN}{ICON} main {GIT_GREEN}⇡2 {GIT_YELLOW}+1 {GIT_YELLOW}!3 {GIT_BLUE}?1{RST}"
             f"{SEP}Opus 5.5 (1M context){DOT}medium"
             f"{SEP}64% context used"
             f"{SEP}{LIMITS}",
         )
 
-    def test_dir_segment_precedes_git_segment(self) -> None:
-        self.assertEqual(
-            self.run_statusline(keep_dir=True).split(SEP)[0],
-            f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_ANCHOR}repo{RST} {GIT_GREEN}main{RST}",
-        )
-
-    def test_dir_segment_without_repository_is_its_own_segment(self) -> None:
-        outside = self.home / "plain"
-        outside.mkdir()
-        self.assertEqual(
-            self.run_statusline(cwd=outside, keep_dir=True).split(SEP)[0],
-            f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_ANCHOR}plain{RST}",
-        )
-
-    def test_dir_segment_truncates_to_unique_and_highlights_anchors(self) -> None:
-        for name in ("alpha", "alps"):
-            (self.home / name).mkdir()
-        (self.home / "project/src/deep").mkdir(parents=True)
-        (self.home / "project/.git").mkdir()
-        segment = self.run_statusline(cwd=self.home / "project/src/deep", keep_dir=True).split(SEP)[0]
-        self.assertEqual(
-            segment,
-            f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_ANCHOR}project{DIR_BLUE}/{DIR_SHORT}s{DIR_BLUE}/{DIR_ANCHOR}deep{RST}",
-        )
-        (self.home / "alpha/one/two").mkdir(parents=True)
-        (self.home / "alpha/once").mkdir()
-        segment = self.run_statusline(cwd=self.home / "alpha/one/two", keep_dir=True).split(SEP)[0]
-        self.assertEqual(
-            segment,
-            f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_SHORT}alph{DIR_BLUE}/{DIR_SHORT}one{DIR_BLUE}/{DIR_ANCHOR}two{RST}",
-        )
-
-    def test_dir_segment_unique_prefix_ignores_files_and_separates_hidden(self) -> None:
-        (self.home / "apple.txt").write_text("")
-        (self.home / ".config/app").mkdir(parents=True)
-        (self.home / ".cache").mkdir()
-        (self.home / "artist/inner").mkdir(parents=True)
-        segment = self.run_statusline(cwd=self.home / ".config/app", keep_dir=True).split(SEP)[0]
-        self.assertEqual(segment, f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_SHORT}.co{DIR_BLUE}/{DIR_ANCHOR}app{RST}")
-        segment = self.run_statusline(cwd=self.home / "artist/inner", keep_dir=True).split(SEP)[0]
-        self.assertEqual(segment, f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_SHORT}a{DIR_BLUE}/{DIR_ANCHOR}inner{RST}")
-
-    def test_dir_segment_for_home_and_outside_home(self) -> None:
-        self.assertEqual(
-            self.run_statusline(cwd=self.home, keep_dir=True).split(SEP)[0], f"{DIR_ANCHOR}~{RST}",
-        )
-        self.assertEqual(self.run_statusline(cwd=Path("/"), keep_dir=True).split(SEP)[0], f"{DIR_BLUE}/{RST}")
-        segment = self.run_statusline(cwd=self.root, keep_dir=True).split(SEP)[0]
-        first = self.root.parts[1]
-        self.assertTrue(segment.startswith(f"{DIR_BLUE}/{DIR_ANCHOR}{first}"), segment)
-        self.assertTrue(segment.endswith(f"{DIR_ANCHOR}{self.root.name}{RST}"), segment)
-        self.assertNotIn("~", segment)
-
     def test_clean_branch(self) -> None:
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main{RST}")
 
     def test_staged_unstaged_and_untracked_counts(self) -> None:
         self.commit("other.txt", "one\n")
@@ -195,18 +130,18 @@ class StatuslineTests(unittest.TestCase):
         (self.repo / "ignored.txt").write_text("ignored\n")
         self.assertEqual(
             self.git_segment(),
-            f"{GIT_GREEN}main {GIT_YELLOW}+2 {GIT_YELLOW}!1 {GIT_BLUE}?4{RST}",
+            f"{GIT_GREEN}{ICON} main {GIT_YELLOW}+2 {GIT_YELLOW}!1 {GIT_BLUE}?4{RST}",
         )
 
     def test_file_both_staged_and_unstaged_counts_twice(self) -> None:
         (self.repo / "tracked.txt").write_text("staged\n")
         self.git("add", "tracked.txt")
         (self.repo / "tracked.txt").write_text("staged then edited\n")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main {GIT_YELLOW}+1 {GIT_YELLOW}!1{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_YELLOW}+1 {GIT_YELLOW}!1{RST}")
 
     def test_renamed_file_counts_as_staged(self) -> None:
         self.git("mv", "tracked.txt", "renamed.txt")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main {GIT_YELLOW}+1{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_YELLOW}+1{RST}")
 
     def test_conflicts(self) -> None:
         self.git("checkout", "-q", "-b", "other")
@@ -214,7 +149,7 @@ class StatuslineTests(unittest.TestCase):
         self.git("checkout", "-q", "main")
         self.commit("tracked.txt", "main\n")
         self.git("merge", "-q", "other", check=False)
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main {GIT_RED}~1{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_RED}~1{RST}")
 
     def test_ahead_and_behind_against_local_bare_remote(self) -> None:
         remote = self.root / "remote.git"
@@ -223,31 +158,31 @@ class StatuslineTests(unittest.TestCase):
         self.git("remote", "add", "origin", str(remote))
         self.git("fetch", "-q", "origin")
         self.git("branch", "-q", "--set-upstream-to=origin/main")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main{RST}")
 
         self.git("reset", "-q", "--hard", "HEAD~1")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main {GIT_GREEN}⇣1{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_GREEN}⇣1{RST}")
 
         self.commit("a.txt", "a\n")
         self.commit("b.txt", "b\n")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main {GIT_GREEN}⇣1{GIT_GREEN}⇡2{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_GREEN}⇣1{GIT_GREEN}⇡2{RST}")
 
         self.git("reset", "-q", "--hard", "origin/main")
         self.commit("c.txt", "c\n")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main {GIT_GREEN}⇡1{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_GREEN}⇡1{RST}")
 
     def test_detached_head_shows_short_oid(self) -> None:
         oid = self.git("rev-parse", "HEAD")
         self.git("checkout", "-q", "--detach")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}@{oid[:8]}{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} @{oid[:8]}{RST}")
 
     def test_long_branch_is_truncated(self) -> None:
         branch = "feature/abcdefghijklmnopqrstuvwxyz-0123456789"
         self.git("checkout", "-q", "-b", branch)
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{branch[:12]}…{branch[-12:]}{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} {branch[:12]}…{branch[-12:]}{RST}")
         exact = "f" * 32
         self.git("checkout", "-q", "-b", exact)
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{exact}{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} {exact}{RST}")
 
     def test_non_repository_omits_git_segment(self) -> None:
         outside = self.home / "plain"
@@ -259,7 +194,7 @@ class StatuslineTests(unittest.TestCase):
 
     def test_cwd_fallback_field(self) -> None:
         payload = {"cwd": str(self.repo), "model": {"display_name": "Opus"}}
-        self.assertEqual(self.run_statusline(payload).split(SEP)[0], f"{GIT_GREEN}main{RST}")
+        self.assertEqual(self.run_statusline(payload).split(SEP)[0], f"{GIT_GREEN}{ICON} main{RST}")
 
     def test_context_percentage_is_truncated(self) -> None:
         outside = self.home / "plain"

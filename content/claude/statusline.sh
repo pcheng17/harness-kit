@@ -1,5 +1,5 @@
 #!/bin/bash
-# Claude Code status line: cwd git | model · effort | context | rate limits, or cost when there are none.
+# Claude Code status line: git | model · effort | context | rate limits, or cost when there are none.
 # Reads session JSON on stdin and prints one line. Runs under macOS bash 3.2.
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -16,13 +16,7 @@ GIT_GREEN="${ESC}[38;5;76m"
 GIT_YELLOW="${ESC}[38;5;178m"
 GIT_BLUE="${ESC}[38;5;39m"
 GIT_RED="${ESC}[38;5;196m"
-DIR_BLUE="${ESC}[0;38;5;31m"
-DIR_SHORT="${ESC}[0;38;5;103m"
-DIR_ANCHOR="${ESC}[0;1;38;5;39m"
-# A directory holding any of these is highlighted as an anchor (mirrors the p10k anchor list).
-DIR_MARKERS=".bzr .citc .git .hg .node-version .python-version .go-version .ruby-version
-  .lua-version .java-version .perl-version .php-version .tool-versions .mise.toml
-  .shorten_folder_marker .svn .terraform CVS Cargo.toml composer.json go.mod package.json stack.yaml"
+BRANCH_ICON=$'\xef\x90\x99' # U+F419, Nerd Font git branch
 
 # One jq process. Each field is exactly one line: wrong types and missing values
 # become "" and control characters become spaces, so later reads stay aligned.
@@ -51,70 +45,6 @@ $(jq -r '
 ' 2>/dev/null)
 FIELDS
 
-# Sets $short to the shortest prefix of directory $2 that no other directory in $1
-# starts with, like p10k's truncate_to_unique. Hidden siblings only compete with
-# hidden names, matching glob semantics.
-unique_prefix() {
-  local parent="$1" name="$2" len=1 sib clash
-  local -a sibs
-  sibs=()
-  if [ "${name:0:1}" = "." ]; then
-    for sib in "$parent"/.*/; do sibs+=("$sib"); done
-  else
-    for sib in "$parent"/*/; do sibs+=("$sib"); done
-  fi
-  while [ "$len" -lt "${#name}" ]; do
-    clash=0
-    for sib in "${sibs[@]}"; do
-      sib="${sib%/}"; sib="${sib##*/}"
-      case "$sib" in . | .. | "$name") continue ;; esac
-      [ -d "$parent/$sib" ] && [ "${sib:0:len}" = "${name:0:len}" ] && { clash=1; break; }
-    done
-    [ "$clash" -eq 0 ] && break
-    len=$((len + 1))
-  done
-  short="${name:0:len}"
-}
-
-# Sets $dir_seg like the p10k prompt: ~ for home, the first, last, and
-# marker-holding directories bold blue, the rest muted and truncated to unique prefixes.
-build_dir_seg() {
-  local path="$1" real="" out="" comp marker anchor i n short
-  local raw parts
-  if [ -n "$HOME" ] && { [ "$path" = "$HOME" ] || [ "${path#"$HOME"/}" != "$path" ]; }; then
-    out="${DIR_ANCHOR}~"; real="$HOME"; path="${path#"$HOME"}"
-  fi
-  IFS=/ read -r -a raw <<<"$path"
-  parts=()
-  for comp in "${raw[@]}"; do
-    [ -n "$comp" ] && parts+=("$comp")
-  done
-  n=${#parts[@]}
-  [ "$n" -eq 0 ] && [ -z "$out" ] && out="${DIR_BLUE}/"
-  i=0
-  while [ "$i" -lt "$n" ]; do
-    comp="${parts[$i]}"
-    anchor=0
-    [ "$i" -eq $((n - 1)) ] && anchor=1
-    [ "$i" -eq 0 ] && [ -z "$real" ] && anchor=1
-    if [ "$anchor" -eq 0 ]; then
-      for marker in $DIR_MARKERS; do
-        [ -e "$real/$comp/$marker" ] && { anchor=1; break; }
-      done
-    fi
-    out="${out}${DIR_BLUE}/"
-    if [ "$anchor" -eq 1 ]; then
-      out="${out}${DIR_ANCHOR}${comp}"
-    else
-      unique_prefix "${real:-/}" "$comp"
-      out="${out}${DIR_SHORT}${short}"
-    fi
-    real="$real/$comp"
-    i=$((i + 1))
-  done
-  dir_seg="${out}${RST}"
-}
-
 git_seg=""
 git_status=$(git -C "${cwd:-$PWD}" --no-optional-locks status --porcelain=v2 --branch 2>/dev/null) || git_status=""
 if [ -n "$git_status" ]; then
@@ -137,10 +67,10 @@ $git_status
 GIT_STATUS
 
   if [ "$branch" = "(detached)" ]; then
-    git_seg="${GIT_GREEN}@${oid:0:8}"
+    git_seg="${GIT_GREEN}${BRANCH_ICON} @${oid:0:8}"
   else
     [ "${#branch}" -gt 32 ] && branch="${branch:0:12}…${branch: -12}"
-    git_seg="${GIT_GREEN}${branch}"
+    git_seg="${GIT_GREEN}${BRANCH_ICON} ${branch}"
   fi
 
   ahead=0; behind=0
@@ -158,13 +88,6 @@ GIT_STATUS
   [ "$unstaged" -gt 0 ] && git_seg="${git_seg} ${GIT_YELLOW}!${unstaged}"
   [ "$untracked" -gt 0 ] && git_seg="${git_seg} ${GIT_BLUE}?${untracked}"
   git_seg="${git_seg}${RST}"
-fi
-
-dir_seg=""
-[ -n "$cwd" ] && build_dir_seg "$cwd"
-loc_seg="$dir_seg"
-if [ -n "$git_seg" ]; then
-  if [ -n "$loc_seg" ]; then loc_seg="${loc_seg} ${git_seg}"; else loc_seg="$git_seg"; fi
 fi
 
 model_seg=""
@@ -220,7 +143,7 @@ if [ -z "$limits_seg" ]; then
 fi
 
 out=""
-for seg in "$loc_seg" "$model_seg" "$ctx_seg" "$limits_seg" "$cost_seg"; do
+for seg in "$git_seg" "$model_seg" "$ctx_seg" "$limits_seg" "$cost_seg"; do
   [ -n "$seg" ] || continue
   if [ -z "$out" ]; then out="$seg"; else out="${out}${SEP}${seg}"; fi
 done
