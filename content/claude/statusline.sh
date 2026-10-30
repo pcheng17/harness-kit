@@ -51,10 +51,35 @@ $(jq -r '
 ' 2>/dev/null)
 FIELDS
 
-# Sets $dir_seg like the p10k prompt, without shortening: ~ for home, the first,
-# last, and marker-holding directories bold blue, the rest muted.
+# Sets $short to the shortest prefix of directory $2 that no other directory in $1
+# starts with, like p10k's truncate_to_unique. Hidden siblings only compete with
+# hidden names, matching glob semantics.
+unique_prefix() {
+  local parent="$1" name="$2" len=1 sib clash
+  local -a sibs
+  sibs=()
+  if [ "${name:0:1}" = "." ]; then
+    for sib in "$parent"/.*/; do sibs+=("$sib"); done
+  else
+    for sib in "$parent"/*/; do sibs+=("$sib"); done
+  fi
+  while [ "$len" -lt "${#name}" ]; do
+    clash=0
+    for sib in "${sibs[@]}"; do
+      sib="${sib%/}"; sib="${sib##*/}"
+      case "$sib" in . | .. | "$name") continue ;; esac
+      [ -d "$parent/$sib" ] && [ "${sib:0:len}" = "${name:0:len}" ] && { clash=1; break; }
+    done
+    [ "$clash" -eq 0 ] && break
+    len=$((len + 1))
+  done
+  short="${name:0:len}"
+}
+
+# Sets $dir_seg like the p10k prompt: ~ for home, the first, last, and
+# marker-holding directories bold blue, the rest muted and truncated to unique prefixes.
 build_dir_seg() {
-  local path="$1" real="" out="" comp marker anchor i n
+  local path="$1" real="" out="" comp marker anchor i n short
   local raw parts
   if [ -n "$HOME" ] && { [ "$path" = "$HOME" ] || [ "${path#"$HOME"/}" != "$path" ]; }; then
     out="${DIR_ANCHOR}~"; real="$HOME"; path="${path#"$HOME"}"
@@ -81,7 +106,8 @@ build_dir_seg() {
     if [ "$anchor" -eq 1 ]; then
       out="${out}${DIR_ANCHOR}${comp}"
     else
-      out="${out}${DIR_SHORT}${comp}"
+      unique_prefix "${real:-/}" "$comp"
+      out="${out}${DIR_SHORT}${short}"
     fi
     real="$real/$comp"
     i=$((i + 1))

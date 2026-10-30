@@ -140,7 +140,7 @@ class StatuslineTests(unittest.TestCase):
             f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_ANCHOR}plain{RST}",
         )
 
-    def test_dir_segment_is_not_shortened_and_highlights_anchors(self) -> None:
+    def test_dir_segment_truncates_to_unique_and_highlights_anchors(self) -> None:
         for name in ("alpha", "alps"):
             (self.home / name).mkdir()
         (self.home / "project/src/deep").mkdir(parents=True)
@@ -148,14 +148,25 @@ class StatuslineTests(unittest.TestCase):
         segment = self.run_statusline(cwd=self.home / "project/src/deep", keep_dir=True).split(SEP)[0]
         self.assertEqual(
             segment,
-            f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_ANCHOR}project{DIR_BLUE}/{DIR_SHORT}src{DIR_BLUE}/{DIR_ANCHOR}deep{RST}",
+            f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_ANCHOR}project{DIR_BLUE}/{DIR_SHORT}s{DIR_BLUE}/{DIR_ANCHOR}deep{RST}",
         )
         (self.home / "alpha/one/two").mkdir(parents=True)
+        (self.home / "alpha/once").mkdir()
         segment = self.run_statusline(cwd=self.home / "alpha/one/two", keep_dir=True).split(SEP)[0]
         self.assertEqual(
             segment,
-            f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_SHORT}alpha{DIR_BLUE}/{DIR_SHORT}one{DIR_BLUE}/{DIR_ANCHOR}two{RST}",
+            f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_SHORT}alph{DIR_BLUE}/{DIR_SHORT}one{DIR_BLUE}/{DIR_ANCHOR}two{RST}",
         )
+
+    def test_dir_segment_unique_prefix_ignores_files_and_separates_hidden(self) -> None:
+        (self.home / "apple.txt").write_text("")
+        (self.home / ".config/app").mkdir(parents=True)
+        (self.home / ".cache").mkdir()
+        (self.home / "artist/inner").mkdir(parents=True)
+        segment = self.run_statusline(cwd=self.home / ".config/app", keep_dir=True).split(SEP)[0]
+        self.assertEqual(segment, f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_SHORT}.co{DIR_BLUE}/{DIR_ANCHOR}app{RST}")
+        segment = self.run_statusline(cwd=self.home / "artist/inner", keep_dir=True).split(SEP)[0]
+        self.assertEqual(segment, f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_SHORT}a{DIR_BLUE}/{DIR_ANCHOR}inner{RST}")
 
     def test_dir_segment_for_home_and_outside_home(self) -> None:
         self.assertEqual(
