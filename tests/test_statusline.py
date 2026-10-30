@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ RST = f"{ESC}[0m"
 GRAY = f"{ESC}[90m"
 SEP = f"{GRAY} | {RST}"
 DOT = f"{GRAY} · {RST}"
+LIMITS = f"5h 23%{DOT}7d 41%"
 GIT_GREEN = f"{ESC}[38;5;76m"
 GIT_YELLOW = f"{ESC}[38;5;178m"
 GIT_BLUE = f"{ESC}[38;5;39m"
@@ -74,6 +76,7 @@ class StatuslineTests(unittest.TestCase):
             "effort": {"level": "medium"},
             "context_window": {"used_percentage": 12.5},
             "cost": {"total_cost_usd": 1.234},
+            "rate_limits": {"five_hour": {"used_percentage": 23.5}, "seven_day": {"used_percentage": 41.2}},
         }
         data.update(overrides)
         if payload is not None:
@@ -120,7 +123,7 @@ class StatuslineTests(unittest.TestCase):
             f"{GIT_GREEN}main {GIT_GREEN}⇡2 {GIT_YELLOW}+1 {GIT_YELLOW}!3 {GIT_BLUE}?1{RST}"
             f"{SEP}Opus 5.5 (1M context){DOT}medium"
             f"{SEP}64% context used"
-            f"{SEP}$1.23",
+            f"{SEP}{LIMITS}",
         )
 
     def test_dir_segment_precedes_git_segment(self) -> None:
@@ -240,7 +243,7 @@ class StatuslineTests(unittest.TestCase):
         outside.mkdir()
         self.assertEqual(
             self.run_statusline(cwd=outside),
-            f"Opus 5.5 (1M context){DOT}medium{SEP}12% context used{SEP}$1.23",
+            f"Opus 5.5 (1M context){DOT}medium{SEP}12% context used{SEP}{LIMITS}",
         )
 
     def test_cwd_fallback_field(self) -> None:
@@ -272,38 +275,91 @@ class StatuslineTests(unittest.TestCase):
         outside.mkdir()
         self.assertEqual(
             self.run_statusline(cwd=outside, model={}),
-            f"12% context used{SEP}$1.23",
+            f"12% context used{SEP}{LIMITS}",
         )
 
-    def test_missing_cost_omits_cost_segment(self) -> None:
+    def test_rate_limits_truncate_to_whole_percent(self) -> None:
         outside = self.home / "plain"
         outside.mkdir()
-        self.assertEqual(
-            self.run_statusline(cwd=outside, cost={}),
-            f"Opus 5.5 (1M context){DOT}medium{SEP}12% context used",
+        limits = {"five_hour": {"used_percentage": 99.9}, "seven_day": {"used_percentage": 0}}
+        segments = self.run_statusline(cwd=outside, rate_limits=limits).split(SEP)
+        self.assertEqual(segments[-1], f"5h 99%{DOT}7d 0%")
+
+    def test_rate_limits_show_only_present_windows(self) -> None:
+        outside = self.home / "plain"
+        outside.mkdir()
+        cases = (
+            ({"seven_day": {"used_percentage": 41.2}}, "7d 41%"),
+            ({"five_hour": {"used_percentage": 23.5}, "seven_day": {}}, "5h 23%"),
+            ({"five_hour": {"used_percentage": "23"}, "seven_day": {"used_percentage": 41}}, "7d 41%"),
         )
+        for limits, expected in cases:
+            with self.subTest(limits=limits):
+                segments = self.run_statusline(cwd=outside, rate_limits=limits).split(SEP)
+                self.assertEqual(segments[-1], expected)
+
+    def test_rate_limits_show_time_until_reset(self) -> None:
+        outside = self.home / "plain"
+        outside.mkdir()
+        now = int(time.time())
+        cases = (
+            (30, "<1m"), (90, "1m"), (45 * 60 + 30, "45m"), (3600 + 30, "1h 0m"),
+            (2 * 3600 + 15 * 60 + 30, "2h 15m"), (86400 + 3 * 3600 + 30, "1d 3h"),
+            (3 * 86400 + 4 * 3600 + 1800, "3d 4h"),
+        )
+        for offset, expected in cases:
+            with self.subTest(offset=offset):
+                limits = {"five_hour": {"used_percentage": 23, "resets_at": now + offset}}
+                segments = self.run_statusline(cwd=outside, rate_limits=limits).split(SEP)
+                self.assertEqual(segments[-1], f"5h 23% ({expected})")
+
+    def test_past_or_malformed_reset_is_omitted(self) -> None:
+        outside = self.home / "plain"
+        outside.mkdir()
+        for resets_at in (int(time.time()) - 60, 0, "soon", None):
+            with self.subTest(resets_at=resets_at):
+                limits = {"seven_day": {"used_percentage": 41, "resets_at": resets_at}}
+                segments = self.run_statusline(cwd=outside, rate_limits=limits).split(SEP)
+                self.assertEqual(segments[-1], "7d 41%")
+
+    def test_cost_replaces_rate_limits_when_there_are_none(self) -> None:
+        outside = self.home / "plain"
+        outside.mkdir()
+        for limits in ({}, "oops", {"five_hour": "oops"}):
+            with self.subTest(limits=limits):
+                segments = self.run_statusline(cwd=outside, rate_limits=limits).split(SEP)
+                self.assertEqual(segments[-1], "$1.23")
+                self.assertEqual(len(segments), 3)
+
+    def test_cost_is_hidden_when_rate_limits_are_shown(self) -> None:
+        outside = self.home / "plain"
+        outside.mkdir()
+        self.assertNotIn("$", self.run_statusline(cwd=outside))
 
     def test_cost_is_formatted_to_cents(self) -> None:
         outside = self.home / "plain"
         outside.mkdir()
         for value, shown in ((0, "$0.00"), (0.005, "$0.01"), (0.05, "$0.05"), (12.3, "$12.30"), (1234.567, "$1234.57")):
             with self.subTest(value=value):
-                segments = self.run_statusline(cwd=outside, cost={"total_cost_usd": value}).split(SEP)
-                self.assertEqual(segments[-1], f"{shown}")
+                payload = {"cost": {"total_cost_usd": value}, "rate_limits": {}}
+                segments = self.run_statusline(cwd=outside, **payload).split(SEP)
+                self.assertEqual(segments[-1], shown)
+
+    def test_missing_or_non_numeric_cost_without_limits_shows_nothing(self) -> None:
+        outside = self.home / "plain"
+        outside.mkdir()
+        for cost in ({}, {"total_cost_usd": "1.23"}):
+            with self.subTest(cost=cost):
+                segments = self.run_statusline(cwd=outside, cost=cost, rate_limits={}).split(SEP)
+                self.assertEqual(segments[-1], "12% context used")
 
     def test_cost_ignores_comma_decimal_locale(self) -> None:
         outside = self.home / "plain"
         outside.mkdir()
         environment = {key: value for key, value in self.environment.items() if key != "LC_ALL"}
         environment.update({"LANG": "de_DE.UTF-8", "LC_NUMERIC": "de_DE.UTF-8"})
-        segments = self.run_statusline(cwd=outside, environment=environment).split(SEP)
-        self.assertEqual(segments[-1], f"$1.23")
-
-    def test_non_numeric_cost_is_omitted(self) -> None:
-        outside = self.home / "plain"
-        outside.mkdir()
-        segments = self.run_statusline(cwd=outside, cost={"total_cost_usd": "1.23"}).split(SEP)
-        self.assertEqual(len(segments), 2)
+        segments = self.run_statusline(cwd=outside, environment=environment, rate_limits={}).split(SEP)
+        self.assertEqual(segments[-1], "$1.23")
 
     def test_control_characters_in_fields_are_neutralized(self) -> None:
         outside = self.home / "plain"
@@ -317,11 +373,11 @@ class StatuslineTests(unittest.TestCase):
         outside.mkdir()
         self.assertEqual(
             self.run_statusline(cwd=outside, effort="high", context_window={"used_percentage": 90}),
-            f"Opus 5.5 (1M context){SEP}90% context used{SEP}$1.23",
+            f"Opus 5.5 (1M context){SEP}90% context used{SEP}{LIMITS}",
         )
         self.assertEqual(
             self.run_statusline(cwd=outside, workspace="oops", model="oops", context_window=[90]),
-            f"0% context used{SEP}$1.23",
+            f"0% context used{SEP}{LIMITS}",
         )
 
     def test_newlines_in_fields_do_not_shift_values(self) -> None:
