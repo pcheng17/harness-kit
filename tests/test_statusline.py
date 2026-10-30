@@ -14,18 +14,16 @@ SCRIPT = SOURCE_ROOT / "content/claude/statusline.sh"
 
 ESC = "\033"
 RST = f"{ESC}[0m"
-SEP = f"{ESC}[90m | {RST}"
-DOT = f"{ESC}[90m · {RST}"
+GRAY = f"{ESC}[90m"
+SEP = f"{GRAY} | {RST}"
+DOT = f"{GRAY} · {RST}"
 GIT_GREEN = f"{ESC}[38;5;76m"
 GIT_YELLOW = f"{ESC}[38;5;178m"
 GIT_BLUE = f"{ESC}[38;5;39m"
 GIT_RED = f"{ESC}[38;5;196m"
-MAGENTA = f"{ESC}[35m"
-GREEN = f"{ESC}[32m"
-YELLOW = f"{ESC}[33m"
-RED = f"{ESC}[31m"
-ORANGE = f"{ESC}[38;5;214m"
-ICON = "\uf419"
+DIR_BLUE = f"{ESC}[0;38;5;31m"
+DIR_SHORT = f"{ESC}[0;38;5;103m"
+DIR_ANCHOR = f"{ESC}[0;1;38;5;39m"
 
 
 @unittest.skipUnless(shutil.which("git") and shutil.which("jq"), "git and jq are required")
@@ -33,9 +31,10 @@ class StatuslineTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name).resolve()
-        (self.root / "home").mkdir()
+        self.home = self.root / "home"
+        self.home.mkdir()
         self.environment = {
-            "HOME": str(self.root / "home"),
+            "HOME": str(self.home),
             "PATH": os.environ["PATH"],
             "LC_ALL": "C",
             "GIT_CONFIG_GLOBAL": "/dev/null",
@@ -44,7 +43,7 @@ class StatuslineTests(unittest.TestCase):
             "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.com",
             "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.com",
         }
-        self.repo = self.root / "repo"
+        self.repo = self.home / "repo"
         self.repo.mkdir()
         self.git("init", "-q", "-b", "main")
         self.commit("tracked.txt", "one\n")
@@ -67,7 +66,7 @@ class StatuslineTests(unittest.TestCase):
 
     def run_statusline(
         self, payload: dict[str, Any] | None = None, *, cwd: Path | None = None,
-        environment: dict[str, str] | None = None, **overrides: Any,
+        environment: dict[str, str] | None = None, keep_dir: bool = False, **overrides: Any,
     ) -> str:
         data: dict[str, Any] = {
             "workspace": {"current_dir": str(cwd or self.repo)},
@@ -87,7 +86,17 @@ class StatuslineTests(unittest.TestCase):
         self.assertEqual(result.stderr, "")
         self.assertTrue(result.stdout.endswith("\n"))
         self.assertEqual(result.stdout.count("\n"), 1, result.stdout)
-        return result.stdout[:-1]
+        output = result.stdout[:-1]
+        return output if keep_dir else self.without_dir(output)
+
+    def without_dir(self, output: str) -> str:
+        """Drop the leading cwd segment so tests of other segments stay independent of it."""
+        for name in ("repo", "plain"):
+            shown = f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_ANCHOR}{name}{RST}"
+            for joiner in (" ", SEP):
+                if output.startswith(shown + joiner):
+                    return output[len(shown + joiner):]
+        return output
 
     def git_segment(self, **overrides: Any) -> str:
         return self.run_statusline(**overrides).split(SEP)[0]
@@ -108,14 +117,56 @@ class StatuslineTests(unittest.TestCase):
         line = self.run_statusline(context_window={"used_percentage": 64.9})
         self.assertEqual(
             line,
-            f"{GIT_GREEN}{ICON} main {GIT_GREEN}⇡2 {GIT_YELLOW}+1 {GIT_YELLOW}!3 {GIT_BLUE}?1{RST}"
-            f"{SEP}{MAGENTA}Opus 5.5 (1M context){DOT}{MAGENTA}medium{RST}"
-            f"{SEP}{YELLOW}64%{RST} context used"
-            f"{SEP}{ORANGE}$1.23{RST}",
+            f"{GIT_GREEN}main {GIT_GREEN}⇡2 {GIT_YELLOW}+1 {GIT_YELLOW}!3 {GIT_BLUE}?1{RST}"
+            f"{SEP}Opus 5.5 (1M context){DOT}medium"
+            f"{SEP}64% context used"
+            f"{SEP}$1.23",
         )
 
+    def test_dir_segment_precedes_git_segment(self) -> None:
+        self.assertEqual(
+            self.run_statusline(keep_dir=True).split(SEP)[0],
+            f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_ANCHOR}repo{RST} {GIT_GREEN}main{RST}",
+        )
+
+    def test_dir_segment_without_repository_is_its_own_segment(self) -> None:
+        outside = self.home / "plain"
+        outside.mkdir()
+        self.assertEqual(
+            self.run_statusline(cwd=outside, keep_dir=True).split(SEP)[0],
+            f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_ANCHOR}plain{RST}",
+        )
+
+    def test_dir_segment_is_not_shortened_and_highlights_anchors(self) -> None:
+        for name in ("alpha", "alps"):
+            (self.home / name).mkdir()
+        (self.home / "project/src/deep").mkdir(parents=True)
+        (self.home / "project/.git").mkdir()
+        segment = self.run_statusline(cwd=self.home / "project/src/deep", keep_dir=True).split(SEP)[0]
+        self.assertEqual(
+            segment,
+            f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_ANCHOR}project{DIR_BLUE}/{DIR_SHORT}src{DIR_BLUE}/{DIR_ANCHOR}deep{RST}",
+        )
+        (self.home / "alpha/one/two").mkdir(parents=True)
+        segment = self.run_statusline(cwd=self.home / "alpha/one/two", keep_dir=True).split(SEP)[0]
+        self.assertEqual(
+            segment,
+            f"{DIR_ANCHOR}~{DIR_BLUE}/{DIR_SHORT}alpha{DIR_BLUE}/{DIR_SHORT}one{DIR_BLUE}/{DIR_ANCHOR}two{RST}",
+        )
+
+    def test_dir_segment_for_home_and_outside_home(self) -> None:
+        self.assertEqual(
+            self.run_statusline(cwd=self.home, keep_dir=True).split(SEP)[0], f"{DIR_ANCHOR}~{RST}",
+        )
+        self.assertEqual(self.run_statusline(cwd=Path("/"), keep_dir=True).split(SEP)[0], f"{DIR_BLUE}/{RST}")
+        segment = self.run_statusline(cwd=self.root, keep_dir=True).split(SEP)[0]
+        first = self.root.parts[1]
+        self.assertTrue(segment.startswith(f"{DIR_BLUE}/{DIR_ANCHOR}{first}"), segment)
+        self.assertTrue(segment.endswith(f"{DIR_ANCHOR}{self.root.name}{RST}"), segment)
+        self.assertNotIn("~", segment)
+
     def test_clean_branch(self) -> None:
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main{RST}")
 
     def test_staged_unstaged_and_untracked_counts(self) -> None:
         self.commit("other.txt", "one\n")
@@ -130,18 +181,18 @@ class StatuslineTests(unittest.TestCase):
         (self.repo / "ignored.txt").write_text("ignored\n")
         self.assertEqual(
             self.git_segment(),
-            f"{GIT_GREEN}{ICON} main {GIT_YELLOW}+2 {GIT_YELLOW}!1 {GIT_BLUE}?4{RST}",
+            f"{GIT_GREEN}main {GIT_YELLOW}+2 {GIT_YELLOW}!1 {GIT_BLUE}?4{RST}",
         )
 
     def test_file_both_staged_and_unstaged_counts_twice(self) -> None:
         (self.repo / "tracked.txt").write_text("staged\n")
         self.git("add", "tracked.txt")
         (self.repo / "tracked.txt").write_text("staged then edited\n")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_YELLOW}+1 {GIT_YELLOW}!1{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main {GIT_YELLOW}+1 {GIT_YELLOW}!1{RST}")
 
     def test_renamed_file_counts_as_staged(self) -> None:
         self.git("mv", "tracked.txt", "renamed.txt")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_YELLOW}+1{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main {GIT_YELLOW}+1{RST}")
 
     def test_conflicts(self) -> None:
         self.git("checkout", "-q", "-b", "other")
@@ -149,7 +200,7 @@ class StatuslineTests(unittest.TestCase):
         self.git("checkout", "-q", "main")
         self.commit("tracked.txt", "main\n")
         self.git("merge", "-q", "other", check=False)
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_RED}~1{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main {GIT_RED}~1{RST}")
 
     def test_ahead_and_behind_against_local_bare_remote(self) -> None:
         remote = self.root / "remote.git"
@@ -158,18 +209,18 @@ class StatuslineTests(unittest.TestCase):
         self.git("remote", "add", "origin", str(remote))
         self.git("fetch", "-q", "origin")
         self.git("branch", "-q", "--set-upstream-to=origin/main")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main{RST}")
 
         self.git("reset", "-q", "--hard", "HEAD~1")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_GREEN}⇣1{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main {GIT_GREEN}⇣1{RST}")
 
         self.commit("a.txt", "a\n")
         self.commit("b.txt", "b\n")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_GREEN}⇣1{GIT_GREEN}⇡2{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main {GIT_GREEN}⇣1{GIT_GREEN}⇡2{RST}")
 
         self.git("reset", "-q", "--hard", "origin/main")
         self.commit("c.txt", "c\n")
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} main {GIT_GREEN}⇡1{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}main {GIT_GREEN}⇡1{RST}")
 
     def test_detached_head_shows_short_oid(self) -> None:
         oid = self.git("rev-parse", "HEAD")
@@ -179,105 +230,105 @@ class StatuslineTests(unittest.TestCase):
     def test_long_branch_is_truncated(self) -> None:
         branch = "feature/abcdefghijklmnopqrstuvwxyz-0123456789"
         self.git("checkout", "-q", "-b", branch)
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} {branch[:12]}…{branch[-12:]}{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{branch[:12]}…{branch[-12:]}{RST}")
         exact = "f" * 32
         self.git("checkout", "-q", "-b", exact)
-        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{ICON} {exact}{RST}")
+        self.assertEqual(self.git_segment(), f"{GIT_GREEN}{exact}{RST}")
 
     def test_non_repository_omits_git_segment(self) -> None:
-        outside = self.root / "plain"
+        outside = self.home / "plain"
         outside.mkdir()
         self.assertEqual(
             self.run_statusline(cwd=outside),
-            f"{MAGENTA}Opus 5.5 (1M context){DOT}{MAGENTA}medium{RST}{SEP}{GREEN}12%{RST} context used{SEP}{ORANGE}$1.23{RST}",
+            f"Opus 5.5 (1M context){DOT}medium{SEP}12% context used{SEP}$1.23",
         )
 
     def test_cwd_fallback_field(self) -> None:
         payload = {"cwd": str(self.repo), "model": {"display_name": "Opus"}}
-        self.assertEqual(self.run_statusline(payload).split(SEP)[0], f"{GIT_GREEN}{ICON} main{RST}")
+        self.assertEqual(self.run_statusline(payload).split(SEP)[0], f"{GIT_GREEN}main{RST}")
 
-    def test_context_color_thresholds(self) -> None:
-        outside = self.root / "plain"
+    def test_context_percentage_is_truncated(self) -> None:
+        outside = self.home / "plain"
         outside.mkdir()
-        for value, color, shown in ((0, GREEN, "0"), (49.9, GREEN, "49"), (50, YELLOW, "50"), (79.99, YELLOW, "79"), (80, RED, "80"), (100, RED, "100")):
+        for value, shown in ((0, "0"), (49.9, "49"), (50, "50"), (79.99, "79"), (80, "80"), (100, "100")):
             with self.subTest(value=value):
                 segments = self.run_statusline(cwd=outside, context_window={"used_percentage": value}).split(SEP)
-                self.assertEqual(segments[1], f"{color}{shown}%{RST} context used")
+                self.assertEqual(segments[1], f"{shown}% context used")
 
     def test_missing_context_is_zero(self) -> None:
-        outside = self.root / "plain"
+        outside = self.home / "plain"
         outside.mkdir()
         payload = {"workspace": {"current_dir": str(outside)}, "model": {"display_name": "Opus"}}
-        self.assertEqual(self.run_statusline(payload), f"{MAGENTA}Opus{RST}{SEP}{GREEN}0%{RST} context used")
+        self.assertEqual(self.run_statusline(payload), f"Opus{SEP}0% context used")
 
     def test_missing_effort_shows_model_only(self) -> None:
-        outside = self.root / "plain"
+        outside = self.home / "plain"
         outside.mkdir()
         segments = self.run_statusline(cwd=outside, effort={}).split(SEP)
-        self.assertEqual(segments[0], f"{MAGENTA}Opus 5.5 (1M context){RST}")
+        self.assertEqual(segments[0], f"Opus 5.5 (1M context)")
 
     def test_missing_model_omits_model_segment(self) -> None:
-        outside = self.root / "plain"
+        outside = self.home / "plain"
         outside.mkdir()
         self.assertEqual(
             self.run_statusline(cwd=outside, model={}),
-            f"{GREEN}12%{RST} context used{SEP}{ORANGE}$1.23{RST}",
+            f"12% context used{SEP}$1.23",
         )
 
     def test_missing_cost_omits_cost_segment(self) -> None:
-        outside = self.root / "plain"
+        outside = self.home / "plain"
         outside.mkdir()
         self.assertEqual(
             self.run_statusline(cwd=outside, cost={}),
-            f"{MAGENTA}Opus 5.5 (1M context){DOT}{MAGENTA}medium{RST}{SEP}{GREEN}12%{RST} context used",
+            f"Opus 5.5 (1M context){DOT}medium{SEP}12% context used",
         )
 
     def test_cost_is_formatted_to_cents(self) -> None:
-        outside = self.root / "plain"
+        outside = self.home / "plain"
         outside.mkdir()
         for value, shown in ((0, "$0.00"), (0.005, "$0.01"), (0.05, "$0.05"), (12.3, "$12.30"), (1234.567, "$1234.57")):
             with self.subTest(value=value):
                 segments = self.run_statusline(cwd=outside, cost={"total_cost_usd": value}).split(SEP)
-                self.assertEqual(segments[-1], f"{ORANGE}{shown}{RST}")
+                self.assertEqual(segments[-1], f"{shown}")
 
     def test_cost_ignores_comma_decimal_locale(self) -> None:
-        outside = self.root / "plain"
+        outside = self.home / "plain"
         outside.mkdir()
         environment = {key: value for key, value in self.environment.items() if key != "LC_ALL"}
         environment.update({"LANG": "de_DE.UTF-8", "LC_NUMERIC": "de_DE.UTF-8"})
         segments = self.run_statusline(cwd=outside, environment=environment).split(SEP)
-        self.assertEqual(segments[-1], f"{ORANGE}$1.23{RST}")
+        self.assertEqual(segments[-1], f"$1.23")
 
     def test_non_numeric_cost_is_omitted(self) -> None:
-        outside = self.root / "plain"
+        outside = self.home / "plain"
         outside.mkdir()
         segments = self.run_statusline(cwd=outside, cost={"total_cost_usd": "1.23"}).split(SEP)
         self.assertEqual(len(segments), 2)
 
     def test_control_characters_in_fields_are_neutralized(self) -> None:
-        outside = self.root / "plain"
+        outside = self.home / "plain"
         outside.mkdir()
         segments = self.run_statusline(cwd=outside, model={"display_name": "Opus\x1b[31m\x07\x7fX"}).split(SEP)
-        self.assertEqual(segments[0], f"{MAGENTA}Opus [31m  X{DOT}{MAGENTA}medium{RST}")
+        self.assertEqual(segments[0], f"Opus [31m  X{DOT}medium")
         self.assertNotIn(ESC + "[31m", "".join(segments))
 
     def test_wrong_typed_field_does_not_shift_later_fields(self) -> None:
-        outside = self.root / "plain"
+        outside = self.home / "plain"
         outside.mkdir()
         self.assertEqual(
             self.run_statusline(cwd=outside, effort="high", context_window={"used_percentage": 90}),
-            f"{MAGENTA}Opus 5.5 (1M context){RST}{SEP}{RED}90%{RST} context used{SEP}{ORANGE}$1.23{RST}",
+            f"Opus 5.5 (1M context){SEP}90% context used{SEP}$1.23",
         )
         self.assertEqual(
             self.run_statusline(cwd=outside, workspace="oops", model="oops", context_window=[90]),
-            f"{GREEN}0%{RST} context used{SEP}{ORANGE}$1.23{RST}",
+            f"0% context used{SEP}$1.23",
         )
 
     def test_newlines_in_fields_do_not_shift_values(self) -> None:
-        outside = self.root / "plain"
+        outside = self.home / "plain"
         outside.mkdir()
         segments = self.run_statusline(cwd=outside, model={"display_name": "Opus\nInjected"}).split(SEP)
-        self.assertEqual(segments[0], f"{MAGENTA}Opus Injected{DOT}{MAGENTA}medium{RST}")
+        self.assertEqual(segments[0], f"Opus Injected{DOT}medium")
 
     def test_missing_jq_is_reported(self) -> None:
         empty_bin = self.root / "bin"
