@@ -16,7 +16,14 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 GENERATED = ROOT / ".generated"
 COMMON_INSTRUCTIONS = ROOT / "content/instructions/AGENTS.md"
-COMPONENTS = frozenset(("skills", "agents", "instructions"))
+CLAUDE_STATUSLINE = ROOT / "content/claude/statusline.sh"
+STATUSLINE_COMMAND = "~/.claude/statusline.sh"
+STATUSLINE_HINT = (
+    'hint: harness-kit never edits ~/.claude/settings.json; to enable the status line, set '
+    '"statusLine": {"type": "command", "command": "~/.claude/statusline.sh"} there yourself'
+)
+COMPONENT_CHOICES = ("skills", "agents", "instructions", "statusline")
+COMPONENTS = frozenset(COMPONENT_CHOICES)
 CAPABILITY_TOOLS = {
     "claude": {"read": "Read", "grep": "Grep", "find": "Glob", "bash": "Bash", "edit": "Edit", "write": "Write"},
     "pi": {"read": "read", "grep": "grep", "find": "find", "bash": "bash", "edit": "edit", "write": "write"},
@@ -149,6 +156,8 @@ def merge_machine_policy(policy: dict[str, Any], overrides: dict[str, Any]) -> d
 def load_catalog(harness: str, components: frozenset[str]) -> tuple[dict[str, Any], list[Agent]]:
     if "instructions" in components and not COMMON_INSTRUCTIONS.is_file():
         raise KitError(f"missing common instructions: {COMMON_INSTRUCTIONS}")
+    if "statusline" in components and harness in ("all", "claude") and not CLAUDE_STATUSLINE.is_file():
+        raise KitError(f"missing Claude status line script: {CLAUDE_STATUSLINE}")
     if "agents" not in components:
         return {}, []
 
@@ -368,6 +377,8 @@ def desired_links(harness: str, agents: list[Agent], components: frozenset[str])
             for skill in sorted((ROOT / "content/skills").iterdir()):
                 if skill.is_dir() and (skill / "SKILL.md").is_file():
                     links.append(Link(user_home / ".claude/skills" / skill.name, skill))
+        if "statusline" in components:
+            links.append(Link(user_home / ".claude/statusline.sh", CLAUDE_STATUSLINE))
     if harness in ("all", "pi", "codex"):
         # Pi and Codex intentionally consume the same user-level skill links.
         if "skills" in components:
@@ -451,6 +462,35 @@ def read_pi_settings(path: Path) -> dict[str, Any]:
     return settings
 
 
+def statusline_hints(harness: str, components: frozenset[str]) -> list[str]:
+    """Explain why Claude is not using the status line; empty when it is.
+
+    Claude's settings are only ever read here, so a symlink is followed and an
+    unreadable file degrades to "not configured" instead of aborting.
+    """
+    if harness not in ("all", "claude") or "statusline" not in components:
+        return []
+    user_home = home()
+    path = user_home / ".claude/settings.json"
+    hints: list[str] = []
+    settings: Any = {}
+    try:
+        settings = json.loads(path.read_text())
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, RecursionError) as error:
+        hints.append(f"warning: cannot read Claude settings {path}: {error}")
+    if not isinstance(settings, dict):
+        hints.append(f"warning: Claude settings do not contain a JSON object: {path}")
+        settings = {}
+    statusline = settings.get("statusLine")
+    accepted = {STATUSLINE_COMMAND, os.path.expanduser(STATUSLINE_COMMAND), str(user_home / ".claude/statusline.sh")}
+    command = statusline.get("command") if isinstance(statusline, dict) else None
+    if isinstance(statusline, dict) and statusline.get("type") == "command" and isinstance(command, str) and command in accepted:
+        return []
+    return [*hints, STATUSLINE_HINT]
+
+
 def install_plan(harness: str, agents: list[Agent], components: frozenset[str]) -> list[Operation]:
     """The ordered Install plan: generation, Pi bootstrap, then links."""
     operations: list[Operation] = []
@@ -512,6 +552,8 @@ def install(harness: str, components: frozenset[str]) -> int:
     files = render(policy, agents, harness) if agents else {}
     operations = install_plan(harness, agents, components)
     print_plan(operations)
+    for hint in statusline_hints(harness, components):
+        print(hint)
     if any(operation.action == "conflict" for operation in operations):
         raise KitError("refusing to overwrite unmanaged destinations")
     for operation in operations:
@@ -546,9 +588,13 @@ def check(harness: str, components: frozenset[str]) -> int:
         packages = settings.get("packages", [])
         installed = isinstance(packages, list) and str(ROOT) in packages
         drift = drift or not installed
+    hints = statusline_hints(harness, components)
+    drift = drift or bool(hints)
     if drift:
         print("harness-kit is valid but not converged; run: uv run harness-kit install")
         print_plan(operations)
+        for hint in hints:
+            print(hint)
         return 1
     print("harness-kit is valid and converged")
     return 0
@@ -570,7 +616,7 @@ def main(argv: list[str] | None = None) -> int:
     for command in ("preview", "install", "check"):
         item = subcommands.add_parser(command, help=COMMAND_HELP[command], description=COMMAND_HELP[command])
         item.add_argument("--harness", choices=("all", *HARNESSES), default="all", help="limit to this harness (default: all)")
-        item.add_argument("--component", action="append", choices=("skills", "agents", "instructions"), help="deploy only this component (repeatable)")
+        item.add_argument("--component", action="append", choices=COMPONENT_CHOICES, help="deploy only this component (repeatable)")
     args = parser.parse_args(argv)
     try:
         components = frozenset(args.component) if args.component else COMPONENTS
@@ -583,6 +629,8 @@ def main(argv: list[str] | None = None) -> int:
                     validate_generated_trees(args.harness)
             operations = install_plan(args.harness, agents, components)
             print_plan(operations)
+            for hint in statusline_hints(args.harness, components):
+                print(hint)
             return 2 if any(operation.action == "conflict" for operation in operations) else 0
         if args.command == "install":
             return install(args.harness, components)

@@ -1342,6 +1342,221 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.path / "xdg/config/harness-kit/config.toml").exists())
 
+    def write_claude_settings(self, settings: object) -> Path:
+        path = self.path / "home/.claude/settings.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(settings) + "\n")
+        return path
+
+    def test_statusline_link_create_noop_and_conflict(self) -> None:
+        destination = self.path / "home/.claude/statusline.sh"
+        script = self.project / "content/claude/statusline.sh"
+        preview = invoke(self.sandbox, "preview", "--harness", "claude", "--component", "statusline")
+        self.assertEqual(preview.returncode, 0, preview.stderr)
+        self.assertIn(f"[CREATE]     {destination} -> {script}", preview.stdout)
+        self.assertFalse((self.path / "home").exists())
+
+        created = invoke(self.sandbox, "install", "--harness", "claude", "--component", "statusline")
+        self.assertEqual(created.returncode, 0, created.stderr)
+        self.assertTrue(destination.is_symlink())
+        self.assertEqual(destination.resolve(), script)
+        self.assertFalse((self.path / "home/.claude/settings.json").exists())
+        self.assertFalse((self.path / "commands").exists())
+        self.assertFalse((self.project / ".generated").exists())
+
+        noop = invoke(self.sandbox, "install", "--harness", "claude", "--component", "statusline")
+        self.assertEqual(noop.returncode, 0, noop.stderr)
+        self.assertIn("[NOOP]", noop.stdout)
+        self.assertNotIn("[CREATE]", noop.stdout)
+
+        destination.unlink()
+        destination.write_text("user status line\n")
+        conflict = invoke(self.sandbox, "install", "--harness", "claude", "--component", "statusline")
+        self.assertEqual(conflict.returncode, 2)
+        self.assertIn("[CONFLICT]", conflict.stdout)
+        self.assertEqual(destination.read_text(), "user status line\n")
+
+    def test_statusline_check_drifts_until_settings_point_at_script(self) -> None:
+        self.assertEqual(invoke(self.sandbox, "install", "--harness", "claude", "--component", "statusline").returncode, 0)
+        settings_path = self.path / "home/.claude/settings.json"
+        cases = (
+            ("missing settings", None),
+            ("no statusLine", {"theme": "dark"}),
+            ("elsewhere", {"statusLine": {"type": "command", "command": "~/bin/other-statusline.sh"}}),
+            ("wrong type", {"statusLine": {"type": "static", "command": "~/.claude/statusline.sh"}}),
+            ("not an object", {"statusLine": "~/.claude/statusline.sh"}),
+        )
+        for name, settings in cases:
+            with self.subTest(case=name):
+                if settings is None:
+                    settings_path.unlink(missing_ok=True)
+                else:
+                    self.write_claude_settings(settings)
+                original = settings_path.read_text() if settings_path.exists() else None
+                result = invoke(self.sandbox, "check", "--harness", "claude", "--component", "statusline")
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("not converged", result.stdout)
+                self.assertIn('"statusLine": {"type": "command", "command": "~/.claude/statusline.sh"}', result.stdout)
+                self.assertIn("~/.claude/settings.json", result.stdout)
+                if original is None:
+                    self.assertFalse(settings_path.exists())
+                else:
+                    self.assertEqual(settings_path.read_text(), original)
+
+    def test_statusline_check_converges_with_tilde_or_absolute_command(self) -> None:
+        self.assertEqual(invoke(self.sandbox, "install", "--harness", "claude", "--component", "statusline").returncode, 0)
+        for command in ("~/.claude/statusline.sh", str(self.path / "home/.claude/statusline.sh")):
+            with self.subTest(command=command):
+                settings_path = self.write_claude_settings({"theme": "dark", "statusLine": {"type": "command", "command": command}})
+                original = settings_path.read_text()
+                result = invoke(self.sandbox, "check", "--harness", "claude", "--component", "statusline")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("valid and converged", result.stdout)
+                self.assertNotIn("hint:", result.stdout)
+                self.assertEqual(settings_path.read_text(), original)
+
+    def test_statusline_check_drifts_when_link_missing_despite_settings(self) -> None:
+        self.write_claude_settings({"statusLine": {"type": "command", "command": "~/.claude/statusline.sh"}})
+        result = invoke(self.sandbox, "check", "--harness", "claude", "--component", "statusline")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("[CREATE]", result.stdout)
+        self.assertNotIn("hint:", result.stdout)
+
+    def test_statusline_preview_and_install_print_hint_without_writing_settings(self) -> None:
+        for settings in (None, {"statusLine": {"type": "command", "command": "other"}}):
+            with self.subTest(settings=settings), temporary_sandbox() as sandbox:
+                settings_path = sandbox.root / "home/.claude/settings.json"
+                original = None
+                if settings is not None:
+                    settings_path.parent.mkdir(parents=True)
+                    original = json.dumps(settings)
+                    settings_path.write_text(original)
+                for command in ("preview", "install"):
+                    result = invoke(sandbox, command, "--harness", "claude", "--component", "statusline")
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn('"statusLine": {"type": "command", "command": "~/.claude/statusline.sh"}', result.stdout)
+                    if original is None:
+                        self.assertFalse(settings_path.exists())
+                    else:
+                        self.assertEqual(settings_path.read_text(), original)
+        self.write_claude_settings({"statusLine": {"type": "command", "command": "~/.claude/statusline.sh"}})
+        for command in ("preview", "install"):
+            result = invoke(self.sandbox, command, "--harness", "claude", "--component", "statusline")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("hint:", result.stdout)
+
+    def test_full_install_check_converges_once_statusline_is_configured(self) -> None:
+        self.assertEqual(invoke(self.sandbox, "install").returncode, 0)
+        settings = self.path / "home/.pi/agent/settings.json"
+        settings.write_text(json.dumps({"packages": [str(self.project)]}) + "\n")
+        unconfigured = invoke(self.sandbox, "check")
+        self.assertEqual(unconfigured.returncode, 1)
+        self.assertIn("hint:", unconfigured.stdout)
+        self.write_claude_settings({"statusLine": {"type": "command", "command": "~/.claude/statusline.sh"}})
+        configured = invoke(self.sandbox, "check")
+        self.assertEqual(configured.returncode, 0, configured.stdout + configured.stderr)
+
+    def test_statusline_symlinked_settings_are_followed_read_only(self) -> None:
+        self.assertEqual(invoke(self.sandbox, "install", "--harness", "claude", "--component", "statusline").returncode, 0)
+        target = self.path / "dotfiles/settings.json"
+        target.parent.mkdir()
+        original = json.dumps({"statusLine": {"type": "command", "command": "~/.claude/statusline.sh"}}) + "\n"
+        target.write_text(original)
+        settings = self.path / "home/.claude/settings.json"
+        settings.symlink_to(target)
+        for command in ("preview", "install", "check"):
+            result = invoke(self.sandbox, command, "--harness", "claude", "--component", "statusline")
+            self.assertEqual(result.returncode, 0, (command, result.stdout + result.stderr))
+            self.assertNotIn("hint:", result.stdout)
+            self.assertNotIn("warning:", result.stdout)
+        self.assertTrue(settings.is_symlink())
+        self.assertEqual(target.read_text(), original)
+
+    def test_unreadable_claude_settings_warn_without_blocking(self) -> None:
+        cases = (
+            ("malformed", lambda path: path.write_text("not json\n"), "cannot read Claude settings"),
+            ("directory", lambda path: path.mkdir(), "cannot read Claude settings"),
+            ("non-object", lambda path: path.write_text("[1, 2]\n"), "do not contain a JSON object"),
+        )
+        for name, create, warning in cases:
+            with self.subTest(case=name), temporary_sandbox() as sandbox:
+                settings = sandbox.root / "home/.claude/settings.json"
+                settings.parent.mkdir(parents=True)
+                create(settings)
+                original = settings.read_text() if settings.is_file() else None
+                preview = invoke(sandbox, "preview", "--harness", "claude", "--component", "statusline")
+                self.assertEqual(preview.returncode, 0, preview.stderr)
+                self.assertIn(warning, preview.stdout)
+                self.assertIn("hint:", preview.stdout)
+                installed = invoke(sandbox, "install", "--harness", "claude", "--component", "statusline")
+                self.assertEqual(installed.returncode, 0, installed.stderr)
+                self.assertIn(warning, installed.stdout)
+                self.assertTrue((sandbox.root / "home/.claude/statusline.sh").is_symlink())
+                checked = invoke(sandbox, "check", "--harness", "claude", "--component", "statusline")
+                self.assertEqual(checked.returncode, 1, checked.stderr)
+                self.assertIn(warning, checked.stdout)
+                self.assertIn("hint:", checked.stdout)
+                if original is None:
+                    self.assertTrue(settings.is_dir())
+                else:
+                    self.assertEqual(settings.read_text(), original)
+
+    def test_wrong_typed_statusline_settings_are_not_configured(self) -> None:
+        self.assertEqual(invoke(self.sandbox, "install", "--harness", "claude", "--component", "statusline").returncode, 0)
+        for statusline in (
+            {"type": "command", "command": ["~/.claude/statusline.sh"]},
+            {"type": "command", "command": {"path": "~/.claude/statusline.sh"}},
+            {"type": "command", "command": 42},
+            {"type": ["command"], "command": "~/.claude/statusline.sh"},
+            ["command", "~/.claude/statusline.sh"],
+            None,
+        ):
+            with self.subTest(statusline=statusline):
+                self.write_claude_settings({"statusLine": statusline})
+                result = invoke(self.sandbox, "check", "--harness", "claude", "--component", "statusline")
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(result.stderr, "")
+                self.assertIn("hint:", result.stdout)
+
+    def test_pi_settings_stay_strict_alongside_lenient_claude_settings(self) -> None:
+        claude = self.path / "home/.claude/settings.json"
+        claude.parent.mkdir(parents=True)
+        claude.write_text("not json\n")
+        pi = self.path / "home/.pi/agent/settings.json"
+        pi.parent.mkdir(parents=True)
+        pi.write_text("not json\n")
+        result = invoke(self.sandbox, "check", "--component", "agents", "--component", "statusline")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("cannot read Pi settings", result.stderr)
+
+    def test_statusline_component_is_claude_only(self) -> None:
+        for harness in ("pi", "codex"):
+            with self.subTest(harness=harness), temporary_sandbox() as sandbox:
+                preview = invoke(sandbox, "preview", "--harness", harness, "--component", "statusline")
+                self.assertEqual(preview.returncode, 0, preview.stderr)
+                self.assertEqual(preview.stdout, "")
+                installed = invoke(sandbox, "install", "--harness", harness, "--component", "statusline")
+                self.assertEqual(installed.returncode, 0, installed.stderr)
+                self.assertEqual(installed.stdout, "")
+                checked = invoke(sandbox, "check", "--harness", harness, "--component", "statusline")
+                self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+                self.assertFalse((sandbox.root / "home").exists())
+                self.assertFalse((sandbox.root / "commands").exists())
+        for harness in ("pi", "codex"):
+            with self.subTest(default_components=harness), temporary_sandbox() as sandbox:
+                result = invoke(sandbox, "install", "--harness", harness)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("statusline", result.stdout)
+                self.assertNotIn("hint:", result.stdout)
+                self.assertFalse((sandbox.root / "home/.claude").exists())
+
+    def test_missing_statusline_script_blocks_claude_install(self) -> None:
+        (self.project / "content/claude/statusline.sh").unlink()
+        result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "statusline")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("missing Claude status line script", result.stderr)
+        self.assertFalse((self.path / "home").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
