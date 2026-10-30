@@ -138,14 +138,38 @@ update_submodules() {
     git -C "$path" -c protocol.file.allow=always ${url_overrides[@]+"${url_overrides[@]}"} submodule update "$@" --recursive
 }
 
+# Sets <branch>'s upstream to origin/<branch>. Written directly because --track refuses a ref that
+# the remote's fetch refspec does not map, as in a clone that fetches only main.
+track_origin() {
+    git -C "$primary" config "branch.$1.remote" origin
+    git -C "$primary" config "branch.$1.merge" "refs/heads/$1"
+}
+
+# Fast-forwards <branch>, just checked out in slot <path>, to origin/<branch> when strictly behind
+# it, and warns when the two have diverged. An equal or ahead branch is left as it is. Moving the
+# branch only after git agreed to check it out keeps a branch busy elsewhere (e.g. mid-rebase in
+# another worktree, which worktree list shows as detached) from being touched.
+follow_origin() {
+    local path="$1" branch="$2" remote="refs/remotes/origin/$2"
+    if git -C "$path" merge-base --is-ancestor "$remote" HEAD; then
+        return
+    elif git -C "$path" merge-base --is-ancestor HEAD "$remote"; then
+        git -C "$path" merge --ff-only --quiet "$remote"
+        echo "worktree: fast-forwarded $branch to origin/$branch"
+    else
+        echo "worktree: warning: $branch and origin/$branch have diverged; checking out $branch as it is"
+    fi
+}
+
 # Puts <branch> in a slot and prints the slot path last on stdout.
 take() {
-    local branch="$1" existing k path slot_branch locked registered branch_exists=0
-    local chosen="" chosen_branch="" created=0
+    local branch="$1" existing k path slot_branch locked registered branch_exists=0 remote_exists=0
+    local chosen="" chosen_branch="" created=0 rc=0
     git check-ref-format --branch "$branch" >/dev/null || die "invalid branch name '$branch'"
 
     existing="$(git -C "$primary" worktree list --porcelain |
         awk -v ref="branch refs/heads/$branch" '/^worktree / { w = substr($0, 10) } $0 == ref { print w }')"
+    # A live worktree is left alone, so its branch is not fast-forwarded to origin.
     if [ -n "$existing" ]; then
         echo "worktree: $branch is already checked out" >&2
         echo "$existing"
@@ -155,6 +179,19 @@ take() {
     {
         check_gh
         git -C "$primary" fetch origin main
+        # Asking origin directly ignores a stale origin/<branch> whose remote branch is gone; exit 2
+        # means absent, anything else nonzero is a failure, not a reason to fork from main.
+        git -C "$primary" ls-remote --exit-code origin "refs/heads/$branch" >/dev/null || rc=$?
+        case "$rc" in
+            0) remote_exists=1 ;;
+            2) ;;
+            *) die "cannot ask origin about $branch (git ls-remote exit $rc)" ;;
+        esac
+        # The explicit refspec updates origin/<branch> even under a narrow fetch config.
+        if [ "$remote_exists" -eq 1 ]; then
+            git -C "$primary" fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" ||
+                die "cannot fetch $branch from origin"
+        fi
         # Submodules clone from the primary checkout's clones, so refresh those first.
         git -C "$primary" submodule foreach --quiet 'git fetch --quiet origin'
         if git -C "$primary" show-ref --verify --quiet "refs/heads/$branch"; then
@@ -180,9 +217,16 @@ take() {
 
         if [ -n "$chosen" ]; then
             if [ "$branch_exists" -eq 1 ]; then
+                # A failed checkout leaves the slot as it was: unlocked, and still free or done.
                 git -C "$chosen" checkout "$branch"
+                if [ "$remote_exists" -eq 1 ]; then
+                    follow_origin "$chosen" "$branch"
+                fi
+            elif [ "$remote_exists" -eq 1 ]; then
+                git -C "$chosen" checkout --no-track -b "$branch" "refs/remotes/origin/$branch"
+                track_origin "$branch"
             else
-                git -C "$chosen" checkout -b "$branch" origin/main
+                git -C "$chosen" checkout -b "$branch" refs/remotes/origin/main
             fi
             update_submodules "$chosen"
             if [ -n "$chosen_branch" ]; then
@@ -196,9 +240,16 @@ take() {
             done
             chosen="$(slot_path "$k")"
             if [ "$branch_exists" -eq 1 ]; then
+                # A refused add creates no slot.
                 git -C "$primary" worktree add "$chosen" "$branch"
+                if [ "$remote_exists" -eq 1 ]; then
+                    follow_origin "$chosen" "$branch"
+                fi
+            elif [ "$remote_exists" -eq 1 ]; then
+                git -C "$primary" worktree add --no-track -b "$branch" "$chosen" "refs/remotes/origin/$branch"
+                track_origin "$branch"
             else
-                git -C "$primary" worktree add -b "$branch" "$chosen" origin/main
+                git -C "$primary" worktree add -b "$branch" "$chosen" refs/remotes/origin/main
             fi
             update_submodules "$chosen" --init
             warn_disk_use
@@ -234,7 +285,7 @@ park() {
     ! is_dirty "$path" || die "$path has uncommitted changes"
 
     git -C "$primary" fetch origin main
-    git -C "$path" checkout --detach origin/main
+    git -C "$path" checkout --detach refs/remotes/origin/main
     update_submodules "$path"
     if [ "$found" -eq 1 ]; then
         git -C "$primary" worktree unlock "$path"

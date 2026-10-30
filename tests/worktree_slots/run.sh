@@ -206,7 +206,9 @@ check "park by path outside a repo" [ "$(head_branch "$m")" = detached ]
 
 echo "== list header lines up with rows"
 out="$(wt list 2>/dev/null)"
-check "header is column-aligned" bash -c 'h=$(head -n1 <<<"$1"); r=$(sed -n 2p <<<"$1"); [ "$(awk "{print index(\$0, \"PATH\")}" <<<"$h")" -eq "$(awk "{print index(\$0, \"/\")}" <<<"$r")" ]' _ "$out"
+# A function, not bash -c: bash 3.2 (stock macOS) misparses escaped quotes inside "$(...)".
+aligned() { [ "$(head -n1 <<<"$1" | awk '{ print index($0, "PATH") }')" -eq "$(sed -n 2p <<<"$1" | awk '{ print index($0, "/") }')" ]; }
+check "header is column-aligned" aligned "$out"
 
 echo "== take asks gh nothing when a free slot exists"
 : >"$GH_STUB_DIR/calls"
@@ -281,6 +283,187 @@ check "failing hook fails take" [ $rc -ne 0 ]
 check "failing hook is named with its slot" grep -q "worktree: .worktree-setup failed in $(slot 01)" "$T/err"
 check "failing hook prints no path" [ -z "$out" ]
 check "slot of a failed hook is held" is_locked "$(slot 01)"
+
+echo "== take follows origin/<branch>, in a reused slot (r) and a new one (n)"
+setup
+# Pushes a commit on <parent> to origin as <branch> from the seed clone, so the primary has not
+# fetched it, and prints the commit.
+remote_commit() {
+    local c
+    c="$(git -C "$T/seed" commit-tree -p "$2" -m "remote $1" "$2^{tree}")"
+    git -C "$T/seed" push -q origin "$c:refs/heads/$1"
+    echo "$c"
+}
+# Makes local <branch> in the primary a new commit on <parent> and prints the commit.
+local_commit() {
+    local c
+    c="$(git -C "$P" commit-tree -p "$2" -m "local $1" "$2^{tree}")"
+    git -C "$P" branch -f "$1" "$c"
+    echo "$c"
+}
+rev() { git -C "$1" rev-parse "$2"; }
+upstream() { git -C "$1" rev-parse --abbrev-ref '@{u}' 2>/dev/null; }
+# Slot 00 stays free for the r cases; slot 01 holds feat/hold so each n case creates slot 02.
+take feat/free >/dev/null 2>&1
+take feat/hold >/dev/null 2>&1
+(cd "$(slot 00)" && "$SCRIPT" park >/dev/null 2>&1)
+check "setup: slot 00 free" [ "$(head_branch "$(slot 00)")" = detached ]
+check "setup: slot 01 held" is_locked "$(slot 01)"
+main="$(git -C "$T/seed" rev-parse main)"
+# Runs one case: take <branch> in the free slot 00 (r) or with slot 00 held, creating 02 (n).
+# Leaves stdout in $out, stderr in $T/err and the slot in $s; finish frees the slot again.
+run() {
+    if [ "$2" = n ]; then git -C "$P" worktree lock "$(slot 00)"; s="$(slot 02)"; else s="$(slot 00)"; fi
+    out="$(take "$1" 2>"$T/err")"; rc=$?
+    [ "$2" = n ] && git -C "$P" worktree unlock "$(slot 00)"
+    check "$1: take succeeds" [ $rc -eq 0 ]
+    check "$1: last stdout line is the slot" [ "$(tail -n1 <<<"$out")" = "$s" ]
+    check "$1: slot on the branch" [ "$(head_branch "$s")" = "$1" ]
+}
+finish() {
+    (cd "$s" && "$SCRIPT" park >/dev/null 2>&1)
+    [ "$s" = "$(slot 02)" ] && git -C "$P" worktree remove --force "$s"
+    return 0
+}
+for m in r n; do
+    b="remote-only-$m"; c="$(remote_commit "$b" main)"
+    run "$b" "$m"
+    check "$b: at origin's commit" [ "$(rev "$s" HEAD)" = "$c" ]
+    check "$b: upstream is origin/$b" [ "$(upstream "$s")" = "origin/$b" ]
+    finish
+
+    b="behind-$m"; git -C "$P" branch -q "$b" origin/main; c="$(remote_commit "$b" main)"
+    run "$b" "$m"
+    check "$b: fast-forwarded to origin" [ "$(rev "$s" HEAD)" = "$c" ]
+    check "$b: says it fast-forwarded" grep -q "fast-forwarded $b to origin/$b" "$T/err"
+    finish
+
+    b="ahead-$m"; r="$(remote_commit "$b" main)"
+    git -C "$P" fetch -q origin "refs/heads/$b:refs/heads/$b"; c="$(local_commit "$b" "$b")"
+    run "$b" "$m"
+    check "$b: local commit kept" [ "$(rev "$s" HEAD)" = "$c" ]
+    check "$b: origin untouched" [ "$(git -C "$T/origin.git" rev-parse "$b")" = "$r" ]
+    check "$b: no warning" not grep -q warning "$T/err"
+    finish
+
+    b="diverged-$m"; r="$(remote_commit "$b" main)"; c="$(local_commit "$b" main)"
+    run "$b" "$m"
+    check "$b: local commit kept" [ "$(rev "$s" HEAD)" = "$c" ]
+    check "$b: origin untouched" [ "$(git -C "$T/origin.git" rev-parse "$b")" = "$r" ]
+    check "$b: warns naming both" grep -q "warning: $b and origin/$b have diverged" "$T/err"
+    check "$b: warning not on stdout" [ "$(wc -l <<<"$out")" -eq 1 ]
+    finish
+
+    b="neither-$m"
+    run "$b" "$m"
+    check "$b: starts at origin/main" [ "$(rev "$s" HEAD)" = "$main" ]
+    finish
+done
+
+echo "== take of a branch checked out in a slot leaves it alone even when origin is ahead"
+old="$(rev "$P" refs/heads/feat/hold)"; remote_commit feat/hold main >/dev/null   # feat/hold is at main
+out="$(take feat/hold 2>/dev/null)"
+check "prints the holding slot" [ "$(tail -n1 <<<"$out")" = "$(slot 01)" ]
+check "branch not moved" [ "$(rev "$P" refs/heads/feat/hold)" = "$old" ]
+
+echo "== take refuses a behind branch stopped mid-rebase in another worktree, leaving it alone"
+for m in r n; do
+    b="rebasing-$m"; c="$(local_commit "$b" main)"
+    git -C "$P" push -q origin "$b"
+    git -C "$P" push -q origin "$(git -C "$P" commit-tree -p "$c" -m ahead "$c^{tree}"):refs/heads/$b"
+    git -C "$P" worktree add -q "$T/dev/proj-$b" "$b" 2>/dev/null
+    git -C "$T/dev/proj-$b" rebase --exec false HEAD~1 >/dev/null 2>&1
+    check "$b: setup: worktree list shows it detached" [ "$(head_branch "$T/dev/proj-$b")" = detached ]
+    [ "$m" = n ] && git -C "$P" worktree lock "$(slot 00)"
+    out="$(take "$b" 2>"$T/err")"; rc=$?
+    [ "$m" = n ] && git -C "$P" worktree unlock "$(slot 00)"
+    check "$b: take fails" [ $rc -ne 0 ]
+    check "$b: prints no path" [ -z "$out" ]
+    check "$b: branch ref unchanged" [ "$(rev "$P" "refs/heads/$b")" = "$c" ]
+    if [ "$m" = r ]; then
+        check "$b: free slot left free" [ "$(head_branch "$(slot 00)")" = detached ]
+        check "$b: free slot left unlocked" not is_locked "$(slot 00)"
+    else
+        check "$b: no slot created" [ ! -e "$(slot 02)" ]
+    fi
+    git -C "$T/dev/proj-$b" rebase --abort
+    git -C "$P" worktree remove --force "$T/dev/proj-$b"
+done
+
+echo "== take dies, creating nothing, when origin cannot be asked or fetched"
+# A git wrapper that fails any call whose arguments include $FAIL_GIT. It drops itself from PATH
+# before running git, so a git on PATH that is itself a wrapper cannot call back into it.
+mkdir -p "$T/gitstub"
+# shellcheck disable=SC2016 # the single-quoted text is the wrapper's own script
+printf '#!/usr/bin/env bash\ncase " $* " in *" $FAIL_GIT "*) echo "stub git: failing $*" >&2; exit 128 ;; esac\nPATH="${PATH#%q:}" exec git "$@"\n' \
+    "$T/gitstub" >"$T/gitstub/git"
+chmod +x "$T/gitstub/git"
+out="$(PATH="$T/gitstub:$PATH" FAIL_GIT=ls-remote take ls-fails 2>"$T/err")"; rc=$?
+check "failed ls-remote fails take" [ $rc -ne 0 ]
+check "failed ls-remote is named" grep -q "cannot ask origin about ls-fails" "$T/err"
+check "failed ls-remote creates no branch" not has_branch ls-fails
+remote_commit fetch-fails main >/dev/null
+out="$(PATH="$T/gitstub:$PATH" FAIL_GIT=+refs/heads/fetch-fails:refs/remotes/origin/fetch-fails take fetch-fails 2>"$T/err")"; rc=$?
+check "failed branch fetch fails take" [ $rc -ne 0 ]
+check "failed branch fetch is named" grep -q "cannot fetch fetch-fails from origin" "$T/err"
+check "failed branch fetch creates no branch" not has_branch fetch-fails
+git -C "$P" remote set-url origin "$T/nonexistent.git"
+out="$(take unreachable 2>/dev/null)"; rc=$?
+git -C "$P" remote set-url origin "$T/origin.git"
+check "unreachable origin fails take" [ $rc -ne 0 ]
+check "unreachable origin creates no branch" not has_branch unreachable
+check "slot 00 still free" [ "$(head_branch "$(slot 00)")" = detached ]
+check "slot 00 still unlocked" not is_locked "$(slot 00)"
+
+echo "== a stale origin/<branch> whose remote branch is gone is ignored"
+b=stale; remote_commit "$b" main >/dev/null
+git -C "$P" fetch -q origin "+refs/heads/$b:refs/remotes/origin/$b"
+git -C "$T/seed" push -q origin ":refs/heads/$b"
+run "$b" r
+check "$b: starts at origin/main" [ "$(rev "$s" HEAD)" = "$main" ]
+check "$b: upstream is not the stale ref" [ "$(upstream "$s")" != "origin/$b" ]
+finish
+
+echo "== a local branch named origin/<branch> does not shadow the remote start point"
+b=foo; git -C "$P" branch -q "origin/$b" main; c="$(remote_commit "$b" main)"
+run "$b" r
+check "$b: at origin's commit" [ "$(rev "$s" HEAD)" = "$c" ]
+finish
+
+echo "== take follows origin/<branch> in a done slot, deleting only the done slot's branch"
+git -C "$P" worktree unlock "$(slot 01)"; merged feat-hold
+git -C "$P" worktree lock "$(slot 00)"
+b=behind-done; git -C "$P" branch -q "$b" origin/main; c="$(remote_commit "$b" main)"
+out="$(take "$b" 2>/dev/null)"
+git -C "$P" worktree unlock "$(slot 00)"
+check "done slot 01 reused" [ "$(tail -n1 <<<"$out")" = "$(slot 01)" ]
+check "$b: fast-forwarded in the done slot" [ "$(rev "$(slot 01)" HEAD)" = "$c" ]
+check "done slot's merged branch deleted" not has_branch feat/hold
+check "taken branch kept" has_branch "$b"
+
+echo "== take of a remote-only branch via a done slot"
+git -C "$P" worktree unlock "$(slot 01)"; merged behind-done
+git -C "$P" worktree lock "$(slot 00)"
+b=remote-done; c="$(remote_commit "$b" main)"
+out="$(take "$b" 2>/dev/null)"
+git -C "$P" worktree unlock "$(slot 00)"
+check "done slot 01 reused" [ "$(tail -n1 <<<"$out")" = "$(slot 01)" ]
+check "$b: at origin's commit" [ "$(rev "$(slot 01)" HEAD)" = "$c" ]
+check "$b: upstream is origin/$b" [ "$(upstream "$(slot 01)")" = "origin/$b" ]
+check "done slot's merged branch deleted" not has_branch behind-done
+
+echo "== take of a remote-only branch under a fetch config that maps only main"
+git -C "$P" config remote.origin.fetch '+refs/heads/main:refs/remotes/origin/main'
+b=narrow; c="$(remote_commit "$b" main)"
+run "$b" r
+check "$b: at origin's commit" [ "$(rev "$s" HEAD)" = "$c" ]
+check "$b: upstream branch configured" [ "$(git -C "$P" config "branch.$b.remote") $(git -C "$P" config "branch.$b.merge")" = "origin refs/heads/$b" ]
+
+echo "== take of the primary checkout's branch leaves it alone even when origin is ahead"
+old="$(rev "$P" refs/heads/main)"; remote_commit main main >/dev/null
+out="$(take main 2>/dev/null)"
+check "prints the primary checkout" [ "$(tail -n1 <<<"$out")" = "$P" ]
+check "main not moved" [ "$(rev "$P" refs/heads/main)" = "$old" ]
 
 echo "== a repository without submodules"
 N="$(mktemp -d "${TMPDIR:-/tmp}/wt-slots-test.XXXXXX")"
