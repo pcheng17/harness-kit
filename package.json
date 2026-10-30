@@ -7,6 +7,8 @@
   "pi": {
     "extensions": [
       "./node_modules/pi-subagents/index.js",
+      "./node_modules/pi-polish/extensions/tools.ts",
+      "./node_modules/pi-polish/extensions/chrome.ts",
       "./node_modules/@juicesharp/rpiv-ask-user-question/index.ts",
       "./node_modules/@juicesharp/rpiv-btw/index.ts",
       "./node_modules/@juicesharp/rpiv-todo/index.ts"
@@ -28,6 +30,7 @@
     "@juicesharp/rpiv-ask-user-question": "^1.13.0",
     "@juicesharp/rpiv-btw": "^1.13.0",
     "@juicesharp/rpiv-todo": "^1.13.0",
+    "pi-polish": "0.1.9",
     "pi-subagents": "^0.78.0"
   },
   "devDependencies": {

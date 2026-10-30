@@ -22,7 +22,7 @@ The repository policy provides complete defaults. To customize an individual age
 
 ### Pi subagents
 
-The Pi configuration depends on the [`pi-subagents`](https://github.com/nicobailon/pi-subagents) extension. Harness Kit installs its custom Pi agents alongside the extension's built-in agents and leaves all `subagents` settings user-managed.
+The Pi configuration depends on the [`pi-subagents`](https://github.com/nicobailon/pi-subagents) extension. Harness Kit installs its custom Pi agents alongside the extension's built-in agents and leaves all `subagents` settings user-managed. It also loads [`pi-polish`](https://github.com/Pringled/pi-extensions/tree/main/packages/pi-polish) from the pinned npm dependency to render compact tool summaries and colored edit diffs. Both extensions are exposed through this checkout's Pi package when the Pi `agents` component is installed.
 
 The narrowest invocation that installs the Pi package and agents is:
 
