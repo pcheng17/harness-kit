@@ -1,6 +1,6 @@
 ---
 name: worktree-slots
-description: "Worktree slots: reusable numbered git worktrees with warm build output. Use when taking a worktree for a branch, parking one once its PR merges or the work is abandoned, or pruning worktrees to reclaim disk."
+description: "Worktree slots: reusable numbered git worktrees with warm build output. Use when taking a worktree for a branch, parking one once its PR is opened or the work is abandoned, or pruning worktrees to reclaim disk."
 ---
 
 Linked worktrees live in numbered **slots** beside the primary checkout: `~/dev/foo` gets `~/dev/foo-wt-00`, `~/dev/foo-wt-01` and so on. A slot's path never changes, so its build output stays configured and warm when a later branch reuses it.
@@ -20,7 +20,7 @@ A branch counts as merged only when `gh` reports a merged PR for it (squash merg
 ## Subcommands
 
 - `take <branch>` puts the branch in a slot and prints the slot path on the last line of stdout; `cd` there to work. It reuses the lowest free slot, then the lowest done slot, and otherwise creates the lowest missing slot, cloning submodules from the primary checkout. A new branch starts at `origin/main`; an existing local branch is checked out as it is; a branch already checked out somewhere just prints that path. The slot is locked with the branch name as the reason.
-- `park [path]` frees a slot (default: the one you are in) once its PR is merged or the work is abandoned, so the next `take` can reuse it: it detaches at `origin/main` and unlocks, keeping the local branch. It refuses the primary checkout and a tree with uncommitted changes.
+- `park [path]` frees a slot (default: the one you are in) as soon as its PR is opened or the work is abandoned, so the next `take` can reuse it: it detaches at `origin/main` and unlocks, keeping the local branch. Park your own slots without waiting to be asked; to return to the branch later, `take` it again. It refuses the primary checkout and a tree with uncommitted changes.
 - `prune [--keep k]` reclaims disk. It removes free and done slots, highest-numbered first, keeping the lowest `k` free ones. It also removes **legacy** worktrees (any other linked worktree that is a sibling of the primary checkout, such as an older `../<repo>-<branch>`) that are unlocked, clean and on a branch whose PR is merged, and prints why it keeps each other one; `--keep` does not apply to them. It deletes only local branches whose PR is merged and lists the other branches not checked out anywhere. Other worktrees are never touched.
 
 ## Per-repo setup hook
