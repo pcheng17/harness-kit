@@ -10,4 +10,4 @@ When a skill's own step needs another model-invoked skill, it says: Load the `gr
 
 ## Consequences
 
-- Codex does not honor `disable-model-invocation`: `codex debug prompt-input` lists this repo's user-invoked skills (`setup-pcheng-skills`, `to-spec`, `triage`, ...) among the skills available to the model. On Codex the "never invoke a user-invoked skill" rule is enforced only by skill wording, until skills ship an `agents/openai.yaml` with `policy.allow_implicit_invocation: false`.
+- User-invoked skills retain `disable-model-invocation: true` for Claude Code and Pi and ship an `agents/openai.yaml` with `policy.allow_implicit_invocation: false` for Codex. Codex ignores the frontmatter flag; its YAML policy disables automatic selection while retaining explicit `$skill-name` invocation. Skills that load other skills still reach only model-invoked skills.
