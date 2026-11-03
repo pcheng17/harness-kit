@@ -582,6 +582,7 @@ merged master
 bslot() { echo "$B/ge-wt-$1"; }
 out="$(cd "$B/.bare" && "$SCRIPT" take feat/a 2>"$M/err")"; rc=$?
 check "take from the bare dir succeeds" [ $rc -eq 0 ]
+command -v flock >/dev/null && check "repository lock lives in the bare dir" [ -f "$B/.bare/wt-slots.lock" ]
 check "slot named after the bare dir's parent" [ "$(tail -n1 <<<"$out")" = "$(bslot 00)" ]
 check "no slot named after .bare" [ ! -e "$B/.bare-wt-00" ]
 check "on feat/a at origin/master" [ "$(mrev "$(bslot 00)" HEAD)" = "$(mrev "$B/.bare" refs/remotes/origin/master)" ]
@@ -675,7 +676,7 @@ race_two_takes() {
 }
 
 echo "== concurrent takes of different branches each get their own slot"
-race_two_takes flock
+race_two_takes default
 
 echo "== concurrent takes of the same branch share one slot"
 setup; pause_stub
@@ -721,6 +722,34 @@ check "outer take prints only slot 00" [ "$out" = "$(slot 00)" ]
 check "take inside the hook got slot 01" [ "$(cat "$T/inner.out")" = "$(slot 01)" ]
 check "take inside the hook did not wait" not grep -q 'waiting for' "$T/inner.err"
 
+if command -v flock >/dev/null; then
+    echo "== a flock held elsewhere times out naming the lock"
+    setup
+    exec 8>>"$P/.git/wt-slots.lock"
+    flock 8
+    out="$(WT_LOCK_TIMEOUT=1 take feat/a 2>"$T/err" 8>&-)"; rc=$?
+    exec 8>&-
+    check "take behind a held lock fails" [ $rc -ne 0 ]
+    check "says once that it is waiting" [ "$(grep -c "^worktree: waiting for $P/.git/wt-slots.lock" "$T/err")" -eq 1 ]
+    check "timeout names the lock" grep -q "gave up after 1s waiting for $P/.git/wt-slots.lock" "$T/err"
+    check "timed-out take prints no path" [ -z "$out" ]
+fi
+
+echo "== a git process left running in the background does not keep the lock"
+# A git wrapper whose fetches leave a sleeper behind, as a detached auto gc would.
+mkdir -p "$T/gcstub"
+# shellcheck disable=SC2016 # the single-quoted text is the wrapper's own script
+printf '#!/usr/bin/env bash\ncase " $* " in *" fetch "*) sleep 30 </dev/null >/dev/null 2>&1 & echo $! >>"$SLEEPERS" ;; esac\nPATH="${PATH#%q:}" exec git "$@"\n' \
+    "$T/gcstub" >"$T/gcstub/git"
+chmod +x "$T/gcstub/git"
+SLEEPERS="$T/sleepers" PATH="$T/gcstub:$PATH" take feat/a >/dev/null 2>&1; rc=$?
+check "take leaving a background git succeeds" [ $rc -eq 0 ]
+check "setup: a sleeper is still running" kill -0 "$(head -n1 "$T/sleepers")"
+out="$(WT_LOCK_TIMEOUT=1 take feat/b 2>"$T/err")"; rc=$?
+check "next take succeeds" [ $rc -eq 0 ]
+check "next take did not wait" not grep -q 'waiting for' "$T/err"
+xargs kill <"$T/sleepers" 2>/dev/null
+
 # This PATH minus flock, as on stock macOS: each directory holding flock is replaced by one linking
 # its other commands. The rest stay as they are, for wrappers (e.g. of git) that drop their own.
 farms="$(mktemp -d "${TMPDIR:-/tmp}/wt-slots-test.XXXXXX")"
@@ -741,7 +770,7 @@ nf() { (cd "$P" && PATH="$NOFLOCK" "$SCRIPT" "$@"); }
 lock_dir() { echo "$P/.git/wt-slots.lock.d"; }
 
 echo "== without flock, concurrent takes of different branches each get their own slot"
-RACE_PATH="$NOFLOCK" race_two_takes fallback
+RACE_PATH="$NOFLOCK" race_two_takes no-flock
 
 echo "== without flock, a lock whose owner died is cleared"
 setup
