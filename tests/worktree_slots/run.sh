@@ -620,5 +620,106 @@ out="$(cd "$M/dev/foo.git" && "$SCRIPT" take feat/a 2>/dev/null)"; rc=$?
 check "take succeeds" [ $rc -eq 0 ]
 check "slot named foo-wt-00" [ "$(tail -n1 <<<"$out")" = "$M/dev/foo-wt-00" ]
 
+# Concurrency. A race is staged, not timed: run a is held by a git wrapper inside its critical
+# section, at the first git call whose arguments include the word $PAUSE_GIT, until $T/resume
+# exists. Run b then starts and is let run until it exits or says it is waiting for the lock;
+# only then does a go on.
+pause_stub() {
+    mkdir -p "$T/pausestub"
+    # shellcheck disable=SC2016 # the single-quoted text is the wrapper's own script
+    printf '#!/usr/bin/env bash\ncase " $* " in *" $PAUSE_GIT "*)\n    if [ ! -e "$PAUSE_DIR/paused" ]; then\n        : >"$PAUSE_DIR/paused"\n        while [ ! -e "$PAUSE_DIR/resume" ]; do sleep 0.05; done\n    fi ;;\nesac\nPATH="${PATH#%q:}" exec git "$@"\n' \
+        "$T/pausestub" >"$T/pausestub/git"
+    chmod +x "$T/pausestub/git"
+}
+# Polls <command> for up to 30 seconds.
+wait_for() { local i; for ((i = 0; i < 600; i++)); do "$@" && return 0; sleep 0.05; done; return 1; }
+b_settled() { [ -e "$T/b.rc" ] || grep -q 'waiting for' "$T/b.err" 2>/dev/null; }
+# race <word> <a args> <b args>: runs `wt.sh <a args>` held at git <word>, then `wt.sh <b args>`,
+# both from the primary checkout and under $RACE_PATH (default $PATH). Each run's stdout, stderr
+# and exit code land in $T/{a,b}.{out,err,rc}; $ra, $rb, $oa and $ob hold the codes and stdouts.
+race() {
+    local a_args b_args staged=1 path="${RACE_PATH:-$PATH}"
+    read -ra a_args <<<"$2"
+    read -ra b_args <<<"$3"
+    rm -f "$T"/paused "$T"/resume "$T"/[ab].out "$T"/[ab].err "$T"/[ab].rc
+    (cd "$P" && PATH="$T/pausestub:$path" PAUSE_GIT="$1" PAUSE_DIR="$T" "$SCRIPT" "${a_args[@]}" >"$T/a.out" 2>"$T/a.err"
+        echo $? >"$T/a.rc") &
+    wait_for [ -e "$T/paused" ] || staged=0
+    (cd "$P" && PATH="$path" "$SCRIPT" "${b_args[@]}" >"$T/b.out" 2>"$T/b.err"; echo $? >"$T/b.rc") &
+    wait_for b_settled || staged=0
+    touch "$T/resume"
+    wait
+    check "race staged ($1: $2 | $3)" [ $staged -eq 1 ]
+    ra="$(cat "$T/a.rc")"; rb="$(cat "$T/b.rc")"; oa="$(cat "$T/a.out")"; ob="$(cat "$T/b.out")"
+}
+lock_reason() { git -C "$P" worktree list --porcelain | awk -v p="$1" '/^worktree /{w=substr($0,10)} /^locked/ && w==p{print substr($0,8)}'; }
+differ() { [ -n "$1" ] && [ "$1" != "$2" ]; }
+waited_once() { [ "$(grep -c 'waiting for' "$T/b.err")" -eq 1 ]; }
+
+# Concurrent takes of feat/a and feat/b, racing for a free slot (r) or a new one (n).
+race_two_takes() {
+    local m="$1"
+    for v in r n; do
+        setup; pause_stub
+        if [ "$v" = r ]; then take feat/x >/dev/null 2>&1; wt park "$(slot 00)" >/dev/null 2>&1; word=checkout; else word=add; fi
+        race "$word" "take feat/a" "take feat/b"
+        check "$m $v: both takes exit 0" [ "$ra $rb" = "0 0" ]
+        check "$m $v: each prints only its path" [ "$(wc -l <"$T/a.out") $(wc -l <"$T/b.out")" = "1 1" ]
+        check "$m $v: different slots" differ "$oa" "$ob"
+        check "$m $v: first slot on feat/a" [ "$(head_branch "$oa")" = feat/a ]
+        check "$m $v: second slot on feat/b" [ "$(head_branch "$ob")" = feat/b ]
+        check "$m $v: first slot locked for feat/a" [ "$(lock_reason "$oa")" = feat/a ]
+        check "$m $v: second slot locked for feat/b" [ "$(lock_reason "$ob")" = feat/b ]
+        check "$m $v: second take said once that it was waiting" waited_once
+    done
+}
+
+echo "== concurrent takes of different branches each get their own slot"
+race_two_takes flock
+
+echo "== concurrent takes of the same branch share one slot"
+setup; pause_stub
+take feat/x >/dev/null 2>&1; wt park "$(slot 00)" >/dev/null 2>&1
+race checkout "take feat/s" "take feat/s"
+check "both takes exit 0" [ "$ra $rb" = "0 0" ]
+check "both print slot 00" [ "$oa $ob" = "$(slot 00) $(slot 00)" ]
+check "slot 00 on feat/s" [ "$(head_branch "$(slot 00)")" = feat/s ]
+check "no second slot" [ ! -e "$(slot 01)" ]
+check "second take found it checked out" grep -q 'feat/s is already checked out' "$T/b.err"
+
+echo "== a take waits for a prune that is removing the free slot"
+setup; pause_stub
+take feat/x >/dev/null 2>&1; wt park "$(slot 00)" >/dev/null 2>&1
+race remove "prune" "take feat/y"
+check "prune and take exit 0" [ "$ra $rb" = "0 0" ]
+check "prune removed slot 00" grep -q "Removed $(slot 00)" "$T/a.out"
+check "take's slot on feat/y" [ "$(head_branch "$ob")" = feat/y ]
+check "take's slot locked for feat/y" [ "$(lock_reason "$ob")" = feat/y ]
+
+echo "== a take waits for a park, then reuses the slot it freed"
+setup; pause_stub
+take feat/x >/dev/null 2>&1
+race unlock "park $(slot 00)" "take feat/y"
+check "park and take exit 0" [ "$ra $rb" = "0 0" ]
+check "take reused the parked slot 00" [ "$ob" = "$(slot 00)" ]
+check "slot 00 on feat/y" [ "$(head_branch "$(slot 00)")" = feat/y ]
+check "slot 00 locked for feat/y" [ "$(lock_reason "$(slot 00)")" = feat/y ]
+
+echo "== .worktree-setup runs without the lock held"
+setup
+export HOOK_P="$P" HOOK_SCRIPT="$SCRIPT" HOOK_OUT="$T/inner"
+# The hook of the first new slot takes another branch, whose new slot runs the hook again.
+printf '#!/bin/sh\n[ -z "$HOOK_NESTED" ] || exit 0\ncd "$HOOK_P" && HOOK_NESTED=1 WT_LOCK_TIMEOUT=5 "$HOOK_SCRIPT" take feat/inner >"$HOOK_OUT.out" 2>"$HOOK_OUT.err"\n' \
+    >"$T/seed/.worktree-setup"
+chmod +x "$T/seed/.worktree-setup"
+git -C "$T/seed" add .worktree-setup
+git -C "$T/seed" commit -q -m hook
+git -C "$T/seed" push -q origin main
+out="$(take feat/outer 2>/dev/null)"; rc=$?
+check "outer take succeeds" [ $rc -eq 0 ]
+check "outer take prints only slot 00" [ "$out" = "$(slot 00)" ]
+check "take inside the hook got slot 01" [ "$(cat "$T/inner.out")" = "$(slot 01)" ]
+check "take inside the hook did not wait" not grep -q 'waiting for' "$T/inner.err"
+
 echo
 if [ $fails -eq 0 ]; then echo "ALL PASSED"; rm -rf "${universes[@]}"; else echo "$fails FAILED (kept ${universes[*]})"; exit 1; fi

@@ -15,6 +15,11 @@ primary_bare=0
 base=""
 # Total slot disk use, in GiB, above which creating a slot and list print a warning.
 warn_gib="${WT_WARN_GIB:-100}"
+# Seconds take, park and prune wait for another run's repository lock before giving up.
+lock_timeout="${WT_LOCK_TIMEOUT:-1800}"
+# The repository lock's path, and 1 while this run holds it; see acquire_lock.
+lock_path=""
+lock_held=0
 
 usage() {
     echo "usage: $0 take <branch> | park [path] | list | prune [--keep k]" >&2
@@ -27,6 +32,40 @@ die() {
 }
 
 [[ "$warn_gib" =~ ^[0-9]+$ ]] || die "WT_WARN_GIB must be a whole number of GiB"
+[[ "$lock_timeout" =~ ^[0-9]+$ ]] || die "WT_LOCK_TIMEOUT must be a whole number of seconds"
+
+# Keeps the lock's descriptor from every git process: one that git leaves running in the
+# background, such as a detached auto gc, would otherwise hold the lock after this run ends.
+git() { command git "$@" 9>&-; }
+
+# Takes the repository lock, waiting up to lock_timeout seconds for another run to drop it. take,
+# park and prune hold it from their first look at the slots until they are done changing them, so
+# concurrent runs never pick, park or remove the same slot. It lives in the git common dir, shared
+# by every worktree and a bare primary, as a flock(1) lock on descriptor 9, which the kernel drops
+# however this process ends.
+acquire_lock() {
+    local common
+    common="$(cd "$primary" && cd "$(git rev-parse --git-common-dir)" && pwd)" ||
+        die "cannot find the git dir of $primary"
+    trap release_lock EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    lock_path="$common/wt-slots.lock"
+    exec 9>>"$lock_path" || die "cannot open $lock_path"
+    if ! flock -n 9; then
+        echo "worktree: waiting for $lock_path, held by another wt.sh run" >&2
+        flock -w "$lock_timeout" 9 ||
+            die "gave up after ${lock_timeout}s waiting for $lock_path (WT_LOCK_TIMEOUT)"
+    fi
+    lock_held=1
+}
+
+release_lock() {
+    [ "$lock_held" -eq 1 ] || return 0
+    lock_held=0
+    exec 9>&-
+}
 
 # Finds the primary checkout from any worktree of the repository containing <dir>: git's first
 # worktree entry. In a bare layout that entry is the bare git dir, which has no work tree, so slots
@@ -210,6 +249,8 @@ take() {
     local branch="$1" existing k path slot_branch locked registered branch_exists=0 remote_exists=0
     local chosen="" chosen_branch="" created=0 rc=0
     git check-ref-format --branch "$branch" >/dev/null || die "invalid branch name '$branch'"
+    # Held from here, so a concurrent take of the same branch sees this one's slot.
+    acquire_lock
 
     existing="$(git -C "$primary" worktree list --porcelain |
         awk -v ref="branch refs/heads/$branch" '/^worktree / { w = substr($0, 10) } $0 == ref { print w }')"
@@ -303,6 +344,8 @@ take() {
             created=1
         fi
         git -C "$primary" worktree lock --reason "$branch" "$chosen"
+        # The git lock now claims the slot, so a slow hook need not keep other runs waiting.
+        release_lock
         # The slot is locked first so a failed hook leaves it held for the branch.
         if [ "$created" -eq 1 ] && [ -x "$chosen/.worktree-setup" ]; then
             (cd "$chosen" && ./.worktree-setup) || die ".worktree-setup failed in $chosen"
@@ -325,6 +368,7 @@ worktree_root() {
 park() {
     local path="$1" k slot locked found=""
     [ "$path" != "$primary" ] || die "refusing to park the primary checkout"
+    acquire_lock
     while IFS=$'\x1f' read -r k slot _ locked _; do
         [ "$slot" = "$path" ] && found="$locked"
     done < <(slots)
@@ -371,6 +415,7 @@ prune() {
         if [ "$1" != --keep ] || [ $# -ne 2 ] || [[ ! "$2" =~ ^[0-9]+$ ]]; then usage; fi
         keep="$2"
     fi
+    acquire_lock
     check_gh
     # Without a resolvable base, the primary's HEAD branch is the one to protect.
     if ! resolve_base; then
