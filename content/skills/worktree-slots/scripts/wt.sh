@@ -32,7 +32,10 @@ die() {
 }
 
 [[ "$warn_gib" =~ ^[0-9]+$ ]] || die "WT_WARN_GIB must be a whole number of GiB"
-[[ "$lock_timeout" =~ ^[0-9]+$ ]] || die "WT_LOCK_TIMEOUT must be a whole number of seconds"
+# Capped at a week, which also keeps it within what flock -w and perl's alarm accept.
+if [[ ! "$lock_timeout" =~ ^[0-9]{1,7}$ ]] || [ "$lock_timeout" -gt 604800 ]; then
+    die "WT_LOCK_TIMEOUT must be a whole number of seconds, at most 604800 (a week)"
+fi
 
 # Keeps the lock's descriptor from every git process: one that git leaves running in the
 # background, such as a detached auto gc, would otherwise hold the lock after this run ends.
@@ -45,7 +48,7 @@ git() { command git "$@" 9>&-; }
 # descriptor 9; the kernel drops it however this process ends. flock(1) takes it, or else (stock
 # macOS has no flock) perl does; both lock the same file, so every run excludes every other.
 acquire_lock() {
-    local common
+    local common rc=0
     common="$(cd "$primary" && cd "$(git rev-parse --git-common-dir)" && pwd)" ||
         die "cannot find the git dir of $primary"
     lock_path="$common/wt-slots.lock"
@@ -56,28 +59,39 @@ acquire_lock() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
     exec 9>>"$lock_path" || die "cannot open $lock_path"
-    if ! lock_fd9 0; then
+    lock_fd9 0 || rc=$?
+    if [ "$rc" -eq 1 ]; then
         echo "worktree: waiting for $lock_path, held by another wt.sh run" >&2
-        lock_fd9 "$lock_timeout" ||
-            die "gave up after ${lock_timeout}s waiting for $lock_path (WT_LOCK_TIMEOUT)"
+        rc=0
+        lock_fd9 "$lock_timeout" || rc=$?
+        [ "$rc" -ne 1 ] || die "gave up after ${lock_timeout}s waiting for $lock_path (WT_LOCK_TIMEOUT)"
     fi
+    [ "$rc" -eq 0 ] || die "cannot lock $lock_path (exit $rc)"
     lock_held=1
 }
 
-# Locks descriptor 9, waiting up to <seconds> (0: not at all). A flock(2) lock belongs to the open
-# file description, which perl inherits as descriptor 9 and shares with this shell, so the lock
-# stays held by this shell after perl exits.
+# Locks descriptor 9, waiting up to <seconds> (0: not at all). Exits 1 when another holder kept it
+# that long, and otherwise nonzero (saying why on stderr) only on an error. A flock(2) lock belongs
+# to the open file description, which perl inherits as descriptor 9 and shares with this shell, so
+# the lock stays held by this shell after perl exits.
 lock_fd9() {
     if command -v flock >/dev/null; then
         if [ "$1" -eq 0 ]; then flock -n 9; else flock -w "$1" 9; fi
         return
     fi
     perl -MFcntl=:flock -e '
-        open(my $f, ">>&=", 9) or exit 2;
-        exit(flock($f, LOCK_EX | LOCK_NB) ? 0 : 1) if $ARGV[0] == 0;
-        $SIG{ALRM} = sub { exit 1 };
-        alarm $ARGV[0];
-        exit(flock($f, LOCK_EX) ? 0 : 1);
+        sub fail { print STDERR "perl: $_[0]: $!\n"; exit 2 }
+        open(my $f, ">>&=", 9) or fail "cannot use descriptor 9";
+        if ($ARGV[0] == 0) {
+            flock($f, LOCK_EX | LOCK_NB) and exit 0;
+            exit 1 if $!{EWOULDBLOCK};
+        } else {
+            $SIG{ALRM} = sub { exit 1 };
+            alarm $ARGV[0];
+            flock($f, LOCK_EX) and exit 0;
+            exit 1 if $!{EINTR};
+        }
+        fail "cannot lock descriptor 9";
     ' "$1"
 }
 

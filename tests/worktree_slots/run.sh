@@ -712,6 +712,7 @@ echo "== .worktree-setup runs without the lock held"
 setup
 export HOOK_P="$P" HOOK_SCRIPT="$SCRIPT" HOOK_OUT="$T/inner"
 # The hook of the first new slot takes another branch, whose new slot runs the hook again.
+# shellcheck disable=SC2016 # the single-quoted text is the hook's own script
 printf '#!/bin/sh\n[ -z "$HOOK_NESTED" ] || exit 0\ncd "$HOOK_P" && HOOK_NESTED=1 WT_LOCK_TIMEOUT=5 "$HOOK_SCRIPT" take feat/inner >"$HOOK_OUT.out" 2>"$HOOK_OUT.err"\n' \
     >"$T/seed/.worktree-setup"
 chmod +x "$T/seed/.worktree-setup"
@@ -832,6 +833,32 @@ touch "$T/resume"
 wait "$pid"; rc=$?
 check "killed take exits 143" [ $rc -eq 143 ]
 check "lock released after a signal" lock_free "$(lock_file)"
+
+echo "== a lock error that is not contention fails at once with the real error"
+# Stand-ins for flock and perl that fail the way a broken descriptor would, not as a held lock.
+mkdir -p "$T/lockerr"
+printf '#!/bin/sh\necho "$0: stub lock error" >&2\nexit %s\n' 71 >"$T/lockerr/flock"
+printf '#!/bin/sh\necho "$0: stub lock error" >&2\nexit %s\n' 2 >"$T/lockerr/perl"
+chmod +x "$T/lockerr/flock" "$T/lockerr/perl"
+for m in flock perl; do
+    if [ "$m" = perl ]; then lp="$T/lockerr:$NOFLOCK"; mv "$T/lockerr/flock" "$T/flock.off"; else lp="$T/lockerr:$PATH"; fi
+    out="$(cd "$P" && PATH="$lp" "$SCRIPT" take feat/f 2>"$T/err")"; rc=$?
+    check "$m: take fails" [ $rc -ne 0 ]
+    check "$m: does not claim the lock is held" not grep -q 'waiting for' "$T/err"
+    check "$m: shows the helper's error" grep -q "stub lock error" "$T/err"
+    check "$m: names the lock" grep -q "cannot lock $(lock_file)" "$T/err"
+    check "$m: prints no path" [ -z "$out" ]
+done
+
+echo "== WT_LOCK_TIMEOUT is capped at a week"
+for v in 99999999999999999999 604801; do
+    out="$(WT_LOCK_TIMEOUT=$v nf take feat/g 2>"$T/err")"; rc=$?
+    check "$v: take fails" [ $rc -ne 0 ]
+    check "$v: says why" grep -q "WT_LOCK_TIMEOUT must be a whole number of seconds, at most 604800" "$T/err"
+    check "$v: creates no branch" not has_branch feat/g
+done
+out="$(WT_LOCK_TIMEOUT=604800 nf take feat/g 2>/dev/null)"; rc=$?
+check "a week is allowed" [ $rc -eq 0 ]
 
 echo "== with neither flock nor perl, take refuses"
 out="$(cd "$P" && PATH="$NOLOCKER" "$SCRIPT" take feat/e 2>"$T/err")"; rc=$?
