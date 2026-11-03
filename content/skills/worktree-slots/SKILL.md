@@ -31,7 +31,7 @@ The base is origin's default branch, read from `origin/HEAD` or else asked of or
 
 ## Concurrency
 
-Runs of `take`, `park` and `prune` in one repository are serialised by a lock in its git common dir (`.git/wt-slots.lock`, or in the bare dir), so concurrent sessions never pick, park or remove the same slot; `list` takes no lock. A run that finds the lock held prints `worktree: waiting for <lock>` once to stderr and blocks; after `WT_LOCK_TIMEOUT` seconds (default 1800) it fails naming the lock. `take` drops the lock once its slot is locked, before the setup hook. The lock is a `flock` where that command exists; elsewhere (stock macOS) it is a `wt-slots.lock.d` directory holding its owner's PID, removed on exit and cleared by the next run if that process died. Runs that disagree on whether `flock` is on `PATH` do not exclude each other.
+Runs of `take`, `park` and `prune` in one repository are serialised by a lock in its git common dir (`.git/wt-slots.lock`, or in the bare dir), so concurrent sessions never pick, park or remove the same slot; `list` takes no lock. A run that finds the lock held prints `worktree: waiting for <lock>` once to stderr and blocks; after `WT_LOCK_TIMEOUT` seconds (default 1800) it fails naming the lock. `take` drops the lock once its slot is locked, before the setup hook. It is a kernel file lock, taken with `flock` or, where that is missing (stock macOS), `perl`, so every run shares it and it is dropped however a run ends; with neither on `PATH`, `take`, `park` and `prune` refuse to run.
 
 ## Per-repo setup hook
 
