@@ -42,7 +42,9 @@ git() { command git "$@" 9>&-; }
 # park and prune hold it from their first look at the slots until they are done changing them, so
 # concurrent runs never pick, park or remove the same slot. It lives in the git common dir, shared
 # by every worktree and a bare primary, as a flock(1) lock on descriptor 9, which the kernel drops
-# however this process ends.
+# however this process ends. Without flock (stock macOS) it is a directory instead, made atomically
+# by mkdir and holding its owner's PID, which the EXIT trap removes. Two runs whose PATHs disagree
+# on flock take different locks and do not exclude each other.
 acquire_lock() {
     local common
     common="$(cd "$primary" && cd "$(git rev-parse --git-common-dir)" && pwd)" ||
@@ -51,6 +53,11 @@ acquire_lock() {
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
+    if ! command -v flock >/dev/null; then
+        lock_path="$common/wt-slots.lock.d"
+        acquire_lock_dir
+        return
+    fi
     lock_path="$common/wt-slots.lock"
     exec 9>>"$lock_path" || die "cannot open $lock_path"
     if ! flock -n 9; then
@@ -61,10 +68,52 @@ acquire_lock() {
     lock_held=1
 }
 
+# The mkdir fallback of acquire_lock. A lock whose owner has died is cleared; one with no PID yet
+# was only just made, so it counts as held. A dead owner's PID reused by a live process keeps the
+# lock until the timeout, whose error names the lock to remove.
+acquire_lock_dir() {
+    local owner noted=0 deadline=$((SECONDS + lock_timeout))
+    until mkdir "$lock_path" 2>/dev/null; do
+        owner="$(cat "$lock_path/pid" 2>/dev/null || true)"
+        if [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null; then
+            clear_stale_lock "$owner"
+            continue
+        fi
+        if [ "$noted" -eq 0 ]; then
+            echo "worktree: waiting for $lock_path, held by wt.sh process ${owner:-?}" >&2
+            noted=1
+        fi
+        [ "$SECONDS" -lt "$deadline" ] ||
+            die "gave up after ${lock_timeout}s waiting for $lock_path (WT_LOCK_TIMEOUT); remove it if process ${owner:-?} is not wt.sh"
+        sleep 0.2
+    done
+    lock_held=1
+    echo "$$" >"$lock_path/pid"
+}
+
+# Clears the lock left by dead process <pid>. Renaming it first lets only one waiter clear it; a
+# waiter that finds another PID in what it renamed took a lock just remade, and puts it back.
+clear_stale_lock() {
+    local stale="$lock_path.stale.$$"
+    rm -rf "$stale"
+    mv "$lock_path" "$stale" 2>/dev/null || return 0
+    if [ "$(cat "$stale/pid" 2>/dev/null || true)" = "$1" ]; then
+        echo "worktree: removing $lock_path left by exited process $1" >&2
+        rm -rf "$stale"
+    elif [ ! -e "$lock_path" ]; then
+        mv "$stale" "$lock_path"
+    fi
+    rm -rf "$stale"
+}
+
 release_lock() {
     [ "$lock_held" -eq 1 ] || return 0
     lock_held=0
-    exec 9>&-
+    if [[ "$lock_path" == *.d ]]; then
+        rm -rf "$lock_path"
+    else
+        exec 9>&-
+    fi
 }
 
 # Finds the primary checkout from any worktree of the repository containing <dir>: git's first
