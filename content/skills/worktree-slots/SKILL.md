@@ -29,6 +29,10 @@ A branch counts as merged only when `gh` reports a merged PR for it (squash merg
 
 The base is origin's default branch, read from `origin/HEAD` or else asked of origin. Set `WT_BASE_BRANCH` to override it, e.g. when a repo's PRs target another branch. `prune` never removes a slot or legacy worktree on the base branch.
 
+## Concurrency
+
+Runs of `take`, `park` and `prune` in one repository are serialised by a lock in its git common dir (`.git/wt-slots.lock`, or in the bare dir), so concurrent sessions never pick, park or remove the same slot; `list` takes no lock. A run that finds the lock held prints `worktree: waiting for <lock>` once to stderr and blocks; after `WT_LOCK_TIMEOUT` seconds (default 1800) it fails naming the lock. `take` drops the lock once its slot is locked, before the setup hook. It is a kernel file lock, taken with `flock` or, where that is missing (stock macOS), `perl`, so every run shares it and it is dropped however a run ends; with neither on `PATH`, `take`, `park` and `prune` refuse to run.
+
 ## Per-repo setup hook
 
 When `take` creates a new slot (not when it reuses one) and the slot has an executable `.worktree-setup` at the repo root, it runs that file with the slot as the working directory, e.g. to configure a build. The slot is locked before the hook runs; if the hook fails, `take` fails naming the slot, which stays held for the branch. Fix the cause and run `./.worktree-setup` in the slot yourself; a second `take` of the branch only prints the path.

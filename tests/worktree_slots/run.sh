@@ -582,6 +582,7 @@ merged master
 bslot() { echo "$B/ge-wt-$1"; }
 out="$(cd "$B/.bare" && "$SCRIPT" take feat/a 2>"$M/err")"; rc=$?
 check "take from the bare dir succeeds" [ $rc -eq 0 ]
+check "repository lock lives in the bare dir" [ -f "$B/.bare/wt-slots.lock" ]
 check "slot named after the bare dir's parent" [ "$(tail -n1 <<<"$out")" = "$(bslot 00)" ]
 check "no slot named after .bare" [ ! -e "$B/.bare-wt-00" ]
 check "on feat/a at origin/master" [ "$(mrev "$(bslot 00)" HEAD)" = "$(mrev "$B/.bare" refs/remotes/origin/master)" ]
@@ -619,6 +620,252 @@ git -C "$M/dev/foo.git" fetch -q origin
 out="$(cd "$M/dev/foo.git" && "$SCRIPT" take feat/a 2>/dev/null)"; rc=$?
 check "take succeeds" [ $rc -eq 0 ]
 check "slot named foo-wt-00" [ "$(tail -n1 <<<"$out")" = "$M/dev/foo-wt-00" ]
+
+# Concurrency. A race is staged, not timed: run a is held by a git wrapper inside its critical
+# section, at the first git call whose arguments include the word $PAUSE_GIT, until $T/resume
+# exists. Run b then starts and is let run until it exits or says it is waiting for the lock;
+# only then does a go on.
+pause_stub() {
+    mkdir -p "$T/pausestub"
+    # shellcheck disable=SC2016 # the single-quoted text is the wrapper's own script
+    printf '#!/usr/bin/env bash\ncase " $* " in *" $PAUSE_GIT "*)\n    if [ ! -e "$PAUSE_DIR/paused" ]; then\n        : >"$PAUSE_DIR/paused"\n        while [ ! -e "$PAUSE_DIR/resume" ]; do sleep 0.05; done\n    fi ;;\nesac\nPATH="${PATH#%q:}" exec git "$@"\n' \
+        "$T/pausestub" >"$T/pausestub/git"
+    chmod +x "$T/pausestub/git"
+}
+# Polls <command> for up to 30 seconds.
+wait_for() { local i; for ((i = 0; i < 600; i++)); do "$@" && return 0; sleep 0.05; done; return 1; }
+b_settled() { [ -e "$T/b.rc" ] || grep -q 'waiting for' "$T/b.err" 2>/dev/null; }
+# race <word> <a args> <b args>: runs `wt.sh <a args>` held at git <word>, then `wt.sh <b args>`,
+# both from the primary checkout, under $RACE_PATH_A and $RACE_PATH_B (default $PATH). Each run's
+# stdout, stderr and exit code land in $T/{a,b}.{out,err,rc}; $ra, $rb, $oa and $ob hold the codes
+# and stdouts.
+race() {
+    local a_args b_args staged=1 path_a="${RACE_PATH_A:-$PATH}" path_b="${RACE_PATH_B:-$PATH}"
+    read -ra a_args <<<"$2"
+    read -ra b_args <<<"$3"
+    rm -f "$T"/paused "$T"/resume "$T"/[ab].out "$T"/[ab].err "$T"/[ab].rc
+    (cd "$P" && PATH="$T/pausestub:$path_a" PAUSE_GIT="$1" PAUSE_DIR="$T" "$SCRIPT" "${a_args[@]}" >"$T/a.out" 2>"$T/a.err"
+        echo $? >"$T/a.rc") &
+    wait_for [ -e "$T/paused" ] || staged=0
+    (cd "$P" && PATH="$path_b" "$SCRIPT" "${b_args[@]}" >"$T/b.out" 2>"$T/b.err"; echo $? >"$T/b.rc") &
+    wait_for b_settled || staged=0
+    touch "$T/resume"
+    wait
+    check "race staged ($1: $2 | $3)" [ $staged -eq 1 ]
+    ra="$(cat "$T/a.rc")"; rb="$(cat "$T/b.rc")"; oa="$(cat "$T/a.out")"; ob="$(cat "$T/b.out")"
+}
+lock_reason() { git -C "$P" worktree list --porcelain | awk -v p="$1" '/^worktree /{w=substr($0,10)} /^locked/ && w==p{print substr($0,8)}'; }
+differ() { [ -n "$1" ] && [ "$1" != "$2" ]; }
+waited_once() { [ "$(grep -c '^worktree: waiting for' "$T/b.err")" -eq 1 ]; }
+
+# Concurrent takes of feat/a and feat/b, racing for a free slot (r) or a new one (n), under
+# $RACE_PATH_A and $RACE_PATH_B.
+race_two_takes() {
+    local m="$1"
+    for v in r n; do
+        setup; pause_stub
+        if [ "$v" = r ]; then take feat/x >/dev/null 2>&1; wt park "$(slot 00)" >/dev/null 2>&1; word=checkout; else word=add; fi
+        race "$word" "take feat/a" "take feat/b"
+        check "$m $v: both takes exit 0" [ "$ra $rb" = "0 0" ]
+        check "$m $v: each prints only its path" [ "$(wc -l <"$T/a.out") $(wc -l <"$T/b.out")" = "1 1" ]
+        check "$m $v: different slots" differ "$oa" "$ob"
+        check "$m $v: first slot on feat/a" [ "$(head_branch "$oa")" = feat/a ]
+        check "$m $v: second slot on feat/b" [ "$(head_branch "$ob")" = feat/b ]
+        check "$m $v: first slot locked for feat/a" [ "$(lock_reason "$oa")" = feat/a ]
+        check "$m $v: second slot locked for feat/b" [ "$(lock_reason "$ob")" = feat/b ]
+        check "$m $v: second take said once that it was waiting" waited_once
+    done
+}
+
+echo "== concurrent takes of different branches each get their own slot"
+race_two_takes default
+
+echo "== concurrent takes of the same branch share one slot"
+setup; pause_stub
+take feat/x >/dev/null 2>&1; wt park "$(slot 00)" >/dev/null 2>&1
+race checkout "take feat/s" "take feat/s"
+check "both takes exit 0" [ "$ra $rb" = "0 0" ]
+check "both print slot 00" [ "$oa $ob" = "$(slot 00) $(slot 00)" ]
+check "slot 00 on feat/s" [ "$(head_branch "$(slot 00)")" = feat/s ]
+check "no second slot" [ ! -e "$(slot 01)" ]
+check "second take found it checked out" grep -q 'feat/s is already checked out' "$T/b.err"
+
+echo "== a take waits for a prune that is removing the free slot"
+setup; pause_stub
+take feat/x >/dev/null 2>&1; wt park "$(slot 00)" >/dev/null 2>&1
+race remove "prune" "take feat/y"
+check "prune and take exit 0" [ "$ra $rb" = "0 0" ]
+check "prune removed slot 00" grep -q "Removed $(slot 00)" "$T/a.out"
+check "take's slot on feat/y" [ "$(head_branch "$ob")" = feat/y ]
+check "take's slot locked for feat/y" [ "$(lock_reason "$ob")" = feat/y ]
+
+echo "== a take waits for a park, then reuses the slot it freed"
+setup; pause_stub
+take feat/x >/dev/null 2>&1
+race unlock "park $(slot 00)" "take feat/y"
+check "park and take exit 0" [ "$ra $rb" = "0 0" ]
+check "take reused the parked slot 00" [ "$ob" = "$(slot 00)" ]
+check "slot 00 on feat/y" [ "$(head_branch "$(slot 00)")" = feat/y ]
+check "slot 00 locked for feat/y" [ "$(lock_reason "$(slot 00)")" = feat/y ]
+
+echo "== .worktree-setup runs without the lock held"
+setup
+export HOOK_P="$P" HOOK_SCRIPT="$SCRIPT" HOOK_OUT="$T/inner"
+# The hook of the first new slot takes another branch, whose new slot runs the hook again.
+# shellcheck disable=SC2016 # the single-quoted text is the hook's own script
+printf '#!/bin/sh\n[ -z "$HOOK_NESTED" ] || exit 0\ncd "$HOOK_P" && HOOK_NESTED=1 WT_LOCK_TIMEOUT=5 "$HOOK_SCRIPT" take feat/inner >"$HOOK_OUT.out" 2>"$HOOK_OUT.err"\n' \
+    >"$T/seed/.worktree-setup"
+chmod +x "$T/seed/.worktree-setup"
+git -C "$T/seed" add .worktree-setup
+git -C "$T/seed" commit -q -m hook
+git -C "$T/seed" push -q origin main
+out="$(take feat/outer 2>/dev/null)"; rc=$?
+check "outer take succeeds" [ $rc -eq 0 ]
+check "outer take prints only slot 00" [ "$out" = "$(slot 00)" ]
+check "take inside the hook got slot 01" [ "$(cat "$T/inner.out")" = "$(slot 01)" ]
+check "take inside the hook did not wait" not grep -q 'waiting for' "$T/inner.err"
+
+echo "== a git process left running in the background does not keep the lock"
+# A git wrapper whose fetches leave a sleeper behind, as a detached auto gc would.
+mkdir -p "$T/gcstub"
+# shellcheck disable=SC2016 # the single-quoted text is the wrapper's own script
+printf '#!/usr/bin/env bash\ncase " $* " in *" fetch "*) sleep 30 </dev/null >/dev/null 2>&1 & echo $! >>"$SLEEPERS" ;; esac\nPATH="${PATH#%q:}" exec git "$@"\n' \
+    "$T/gcstub" >"$T/gcstub/git"
+chmod +x "$T/gcstub/git"
+SLEEPERS="$T/sleepers" PATH="$T/gcstub:$PATH" take feat/a >/dev/null 2>&1; rc=$?
+check "take leaving a background git succeeds" [ $rc -eq 0 ]
+check "setup: a sleeper is still running" kill -0 "$(head -n1 "$T/sleepers")"
+out="$(WT_LOCK_TIMEOUT=1 take feat/b 2>"$T/err")"; rc=$?
+check "next take succeeds" [ $rc -eq 0 ]
+check "next take did not wait" not grep -q 'waiting for' "$T/err"
+xargs kill <"$T/sleepers" 2>/dev/null
+
+# path_without <var> <command...>: sets <var> to this PATH minus the commands, as on stock macOS
+# (no flock). Each directory holding one is replaced by one linking its other commands; the rest
+# stay as they are, for wrappers (e.g. of git) that drop their own directory from PATH.
+path_without() {
+    local var="$1" farm d f c i out="" path_dirs
+    shift
+    farm="$(mktemp -d "${TMPDIR:-/tmp}/wt-slots-test.XXXXXX")"
+    universes+=("$farm")
+    IFS=: read -ra path_dirs <<<"$PATH"
+    for i in "${!path_dirs[@]}"; do
+        d="${path_dirs[i]}"
+        for c in "$@"; do
+            if [ -x "$d/$c" ]; then
+                mkdir "$farm/$i"
+                for f in "$d"/*; do
+                    case " $* " in *" ${f##*/} "*) ;; *) ln -s "$f" "$farm/$i/" ;; esac
+                done
+                d="$farm/$i"
+                break
+            fi
+        done
+        out="${out:+$out:}$d"
+    done
+    printf -v "$var" %s "$out"
+}
+path_without NOFLOCK flock
+path_without NOLOCKER flock perl
+check "setup: flock is off the no-flock PATH" not env PATH="$NOFLOCK" bash -c 'command -v flock'
+check "setup: perl is on the no-flock PATH" env PATH="$NOFLOCK" bash -c 'command -v perl >/dev/null'
+check "setup: perl is off the no-locker PATH" not env PATH="$NOLOCKER" bash -c 'command -v perl'
+nf() { (cd "$P" && PATH="$NOFLOCK" "$SCRIPT" "$@"); }
+lock_file() { echo "$P/.git/wt-slots.lock"; }
+# Succeeds when nothing holds a flock(2) lock on <file>.
+lock_free() { perl -MFcntl=:flock -e 'open(my $f, ">>", $ARGV[0]) or die; exit(flock($f, LOCK_EX | LOCK_NB) ? 0 : 1)' "$1"; }
+# Locks the open file description of descriptor 8 with a one-shot perl, as wt.sh does without flock.
+lock_fd8() { perl -MFcntl=:flock -e 'open(my $f, ">>&=", 8) or die; flock($f, LOCK_EX) or die'; }
+
+echo "== a lock perl takes on an inherited descriptor outlives perl"
+setup
+exec 8>>"$(lock_file)"
+lock_fd8
+check "held after perl exits" not lock_free "$(lock_file)"
+exec 8>&-
+check "free once the descriptor closes" lock_free "$(lock_file)"
+
+echo "== without flock, concurrent takes of different branches each get their own slot"
+RACE_PATH_A="$NOFLOCK" RACE_PATH_B="$NOFLOCK" race_two_takes perl
+
+if command -v flock >/dev/null; then
+    echo "== a take locking with flock and one locking with perl exclude each other"
+    RACE_PATH_B="$NOFLOCK" race_two_takes flock-then-perl
+    RACE_PATH_A="$NOFLOCK" race_two_takes perl-then-flock
+fi
+
+echo "== a lock held elsewhere times out naming the lock"
+setup
+take feat/a >/dev/null 2>&1
+exec 8>>"$(lock_file)"
+lock_fd8
+for m in default perl; do
+    if [ "$m" = perl ]; then lp="$NOFLOCK"; else lp="$PATH"; fi
+    out="$(cd "$P" && WT_LOCK_TIMEOUT=1 PATH="$lp" "$SCRIPT" take feat/b 2>"$T/err" 8>&-)"; rc=$?
+    check "$m: take behind a held lock fails" [ $rc -ne 0 ]
+    check "$m: says once that it is waiting" [ "$(grep -c "^worktree: waiting for $(lock_file)" "$T/err")" -eq 1 ]
+    check "$m: timeout names the lock" grep -q "gave up after 1s waiting for $(lock_file)" "$T/err"
+    check "$m: timed-out take prints no path" [ -z "$out" ]
+done
+WT_LOCK_TIMEOUT=1 nf list >/dev/null 2>&1 8>&-; rc=$?
+check "list takes no lock" [ $rc -eq 0 ]
+(cd "$(slot 00)" && WT_LOCK_TIMEOUT=1 PATH="$NOFLOCK" "$SCRIPT" park >/dev/null 2>&1 8>&-); rc=$?
+check "park waits for the lock" [ $rc -ne 0 ]
+WT_LOCK_TIMEOUT=1 nf prune >/dev/null 2>&1 8>&-; rc=$?
+check "prune waits for the lock" [ $rc -ne 0 ]
+exec 8>&-
+
+echo "== without flock, the lock is released when take dies or is killed"
+git -C "$P" remote set-url origin "$T/nonexistent.git"
+nf take feat/c >/dev/null 2>&1; rc=$?
+git -C "$P" remote set-url origin "$T/origin.git"
+check "take dies on an unreachable origin" [ $rc -ne 0 ]
+check "lock released after die" lock_free "$(lock_file)"
+pause_stub
+rm -f "$T/paused" "$T/resume"
+(cd "$P" && export PATH="$T/pausestub:$NOFLOCK" PAUSE_GIT=add PAUSE_DIR="$T" && exec "$SCRIPT" take feat/d) >/dev/null 2>&1 &
+pid=$!
+wait_for [ -e "$T/paused" ]
+check "lock held mid-take" not lock_free "$(lock_file)"
+check "no perl left running to hold it" [ -z "$(pgrep -x -P "$pid" perl)" ]
+kill -TERM "$pid"
+touch "$T/resume"
+wait "$pid"; rc=$?
+check "killed take exits 143" [ $rc -eq 143 ]
+check "lock released after a signal" lock_free "$(lock_file)"
+
+echo "== a lock error that is not contention fails at once with the real error"
+# Stand-ins for flock and perl that fail the way a broken descriptor would, not as a held lock.
+mkdir -p "$T/lockerr"
+printf '#!/bin/sh\necho "$0: stub lock error" >&2\nexit %s\n' 71 >"$T/lockerr/flock"
+printf '#!/bin/sh\necho "$0: stub lock error" >&2\nexit %s\n' 2 >"$T/lockerr/perl"
+chmod +x "$T/lockerr/flock" "$T/lockerr/perl"
+for m in flock perl; do
+    if [ "$m" = perl ]; then lp="$T/lockerr:$NOFLOCK"; mv "$T/lockerr/flock" "$T/flock.off"; else lp="$T/lockerr:$PATH"; fi
+    out="$(cd "$P" && PATH="$lp" "$SCRIPT" take feat/f 2>"$T/err")"; rc=$?
+    check "$m: take fails" [ $rc -ne 0 ]
+    check "$m: does not claim the lock is held" not grep -q 'waiting for' "$T/err"
+    check "$m: shows the helper's error" grep -q "stub lock error" "$T/err"
+    check "$m: names the lock" grep -q "cannot lock $(lock_file)" "$T/err"
+    check "$m: prints no path" [ -z "$out" ]
+done
+
+echo "== WT_LOCK_TIMEOUT is capped at a week"
+for v in 99999999999999999999 604801; do
+    out="$(WT_LOCK_TIMEOUT=$v nf take feat/g 2>"$T/err")"; rc=$?
+    check "$v: take fails" [ $rc -ne 0 ]
+    check "$v: says why" grep -q "WT_LOCK_TIMEOUT must be a whole number of seconds, at most 604800" "$T/err"
+    check "$v: creates no branch" not has_branch feat/g
+done
+out="$(WT_LOCK_TIMEOUT=604800 nf take feat/g 2>/dev/null)"; rc=$?
+check "a week is allowed" [ $rc -eq 0 ]
+
+echo "== with neither flock nor perl, take refuses"
+out="$(cd "$P" && PATH="$NOLOCKER" "$SCRIPT" take feat/e 2>"$T/err")"; rc=$?
+check "take fails" [ $rc -ne 0 ]
+check "names what it needs" grep -q "needs flock or perl" "$T/err"
+check "prints no path" [ -z "$out" ]
+check "creates no branch" not has_branch feat/e
 
 echo
 if [ $fails -eq 0 ]; then echo "ALL PASSED"; rm -rf "${universes[@]}"; else echo "$fails FAILED (kept ${universes[*]})"; exit 1; fi
