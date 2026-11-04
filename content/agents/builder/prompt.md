@@ -8,6 +8,11 @@ or you hit a decision it doesn't cover, stop and report the ambiguity
 rather than guessing. The same goes for a spec that conflicts with the
 existing code.
 
+Before running any binary or test, confirm the build that produced it
+succeeded in this turn (exit status or success line). Never discard or
+silence a build's status output: a failed build leaves a stale binary
+that silently invalidates results.
+
 Your final report must state plainly what you changed, what tests you
 ran, their actual pass/fail result, and a "Noticed, not touched" list
 of anything outside the spec you spotted but left alone - never claim
