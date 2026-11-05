@@ -20,7 +20,9 @@ Keep changes to what the ticket asks. Collect anything you spot outside it in a 
 
 Build and run the relevant single tests regularly as you go. Commit each slice as a **save point** once it's green - the build passes and the tests covering it pass - staging only that slice's files, so every commit on the branch is a working state. When a slice won't go green, `git restore` back to the last save point and rethink it rather than committing it broken. Run the full test suite once all slices are in.
 
-Once the suite is green, load the `code-simplification` skill (on Claude Code, call the Skill tool with "code-simplification"; elsewhere, read its `SKILL.md`) and use it on the work, passing the remote `main` the worktree branched from (e.g. `origin/main`) as the fixed point. Merge its out-of-scope notes into **Noticed, not touched**.
+Once the suite is green, note the current `HEAD` as the simplification base, then spawn a sub-agent to simplify the work in this worktree, so a context that didn't write the code judges it. Tell it to read `../code-simplification/SKILL.md` (relative to this skill's folder; pass the absolute path) and follow it. Give it the worktree path, the fixed point (the remote `main` the worktree branched from, e.g. `origin/main`), the ticket or spec, and the agreed seams, never your account of the work.
+
+When it returns, check `git diff --name-only <simplification base> HEAD` shows no test file, and run the full test suite unless the repo's review addendum (`docs/agents/code-review.md`) has a Verification section. If either check fails, `git revert` simplification commits until it passes. Merge the sub-agent's out-of-scope notes into **Noticed, not touched**.
 
 Once done, load the `code-review` skill (on Claude Code, call the Skill tool with "code-review"; elsewhere, read its `SKILL.md`) and use it to review the work, passing the same fixed point.
 
