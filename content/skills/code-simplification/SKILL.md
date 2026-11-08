@@ -24,7 +24,7 @@ A documented repo standard overrides both lists.
 
 ### 3. Read the fence
 
-Before changing or deleting each candidate, apply **Chesterton's Fence**: say what it's responsible for, what calls it and what it calls, which tests pin its behaviour, and why it was written this way. For code that predates the fixed point, the why comes from `git log -L` or `git blame`; for code new in this change, from the ticket or spec. A candidate that predates the fixed point stays as it is if you can't state its reason. Structure new in this change works the other way: if the ticket or spec doesn't call for it, that's the case for removing it.
+Before changing or deleting each candidate, apply **Chesterton's Fence**: say what it's responsible for, what calls it and what it calls, which tests pin its behaviour, and why it was written this way. For code that predates the fixed point, the why comes from `git log -L` or `git blame`; for code new in this change, from the ticket or spec. A candidate that predates the fixed point stays as it is if you can't state its reason. An abstraction that is new in this change (a helper, layer, interface, or indirection) gets the opposite default: if the ticket or spec doesn't call for it, collapse it.
 
 ### 4. Keep modules deep
 
