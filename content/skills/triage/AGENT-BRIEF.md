@@ -26,6 +26,10 @@ Describe **what** the system should do, not **how** to implement it. The agent w
 - **Good:** "When a user runs `/triage` with no arguments, they should see a summary of issues needing attention"
 - **Bad:** "Add a switch statement in the main handler function"
 
+### Verified absence claims
+
+Before stating that something is absent ("nothing checks X", "no caller does Y"), search the whole repo for the concept, not just the files at hand, and say what you searched for. An unverified absence claim sends the agent to build something that already exists.
+
 ### Complete acceptance criteria
 
 The agent needs to know when it's done. Every agent brief must have concrete, testable acceptance criteria. Each criterion should be independently verifiable.
