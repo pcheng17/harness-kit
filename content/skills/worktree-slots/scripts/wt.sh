@@ -38,8 +38,10 @@ if [[ ! "$lock_timeout" =~ ^[0-9]{1,7}$ ]] || [ "$lock_timeout" -gt 604800 ]; th
 fi
 
 # Keeps the lock's descriptor from every git process: one that git leaves running in the
-# background, such as a detached auto gc, would otherwise hold the lock after this run ends.
-git() { command git "$@" 9>&-; }
+# background, such as a detached auto gc, would otherwise hold the lock after this run ends. Closed
+# in a subshell, not by `command git 9>&-`: bash 3.2 (stock macOS) keeps a builtin's redirected
+# descriptor on a saved copy that its children inherit, lock included.
+git() { (exec 9>&-; command git "$@"); }
 
 # Takes the repository lock, waiting up to lock_timeout seconds for another run to drop it. take,
 # park and prune hold it from their first look at the slots until they are done changing them, so

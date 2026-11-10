@@ -3,6 +3,10 @@
 # Usage: run.sh [path-to-wt.sh]   (default: the skill's wt.sh in this checkout)
 # Each scenario builds its universe under $TMPDIR; all are removed when every check passes.
 set -uo pipefail
+# wt.sh prints paths as git reports them, symlinks resolved, so universes are made under a physical
+# TMPDIR; on macOS /tmp and /var/folders are symlinks into /private.
+TMPDIR="$(cd "${TMPDIR:-/tmp}" && pwd -P)" || exit 1
+export TMPDIR
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE="$(realpath "${1:-$HERE/../../content/skills/worktree-slots/scripts/wt.sh}")"
@@ -657,6 +661,8 @@ race() {
 lock_reason() { git -C "$P" worktree list --porcelain | awk -v p="$1" '/^worktree /{w=substr($0,10)} /^locked/ && w==p{print substr($0,8)}'; }
 differ() { [ -n "$1" ] && [ "$1" != "$2" ]; }
 waited_once() { [ "$(grep -c '^worktree: waiting for' "$T/b.err")" -eq 1 ]; }
+# Prints <file>'s line count; BSD wc (macOS) pads it with spaces.
+lines() { wc -l <"$1" | tr -d ' '; }
 
 # Concurrent takes of feat/a and feat/b, racing for a free slot (r) or a new one (n), under
 # $RACE_PATH_A and $RACE_PATH_B.
@@ -667,7 +673,7 @@ race_two_takes() {
         if [ "$v" = r ]; then take feat/x >/dev/null 2>&1; wt park "$(slot 00)" >/dev/null 2>&1; word=checkout; else word=add; fi
         race "$word" "take feat/a" "take feat/b"
         check "$m $v: both takes exit 0" [ "$ra $rb" = "0 0" ]
-        check "$m $v: each prints only its path" [ "$(wc -l <"$T/a.out") $(wc -l <"$T/b.out")" = "1 1" ]
+        check "$m $v: each prints only its path" [ "$(lines "$T/a.out") $(lines "$T/b.out")" = "1 1" ]
         check "$m $v: different slots" differ "$oa" "$ob"
         check "$m $v: first slot on feat/a" [ "$(head_branch "$oa")" = feat/a ]
         check "$m $v: second slot on feat/b" [ "$(head_branch "$ob")" = feat/b ]
