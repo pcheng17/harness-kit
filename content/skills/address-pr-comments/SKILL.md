@@ -32,7 +32,7 @@ Code review threads live wherever the PR/MR itself lives, which is not always th
 
 If the user didn't name one, default to the PR/MR associated with the current branch. Confirm before proceeding if there's any doubt which one they mean.
 
-If the working tree isn't on the PR/MR's branch, switch to it and pull the latest first. **Stop** if there are uncommitted changes (`git status --porcelain` is non-empty) and ask the user to commit or stash before continuing.
+Do all work in a separate worktree on the PR/MR's branch. Unless the repo prescribes its own recipe, load the `worktree-slots` skill (on Claude Code, call the Skill tool with "worktree-slots"; elsewhere, read its `SKILL.md`), take the worktree with its `scripts/wt.sh take <branch>` and `cd` to the path it prints last. Pull the latest. **Stop** if there are uncommitted changes (`git status --porcelain` is non-empty) and ask the user to commit or stash before continuing.
 
 ## 2. Fetch every thread and filter to candidates
 
@@ -157,3 +157,5 @@ Summarize:
 - **Skipped** - threads left untouched at the user's direction
 
 Do **not** resolve/close any thread - that's the reviewer's call.
+
+Park the slot with `wt.sh park` whenever you stop working in it, including when the run ends early or the user abandons it.

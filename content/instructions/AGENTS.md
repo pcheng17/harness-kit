@@ -11,13 +11,6 @@
 - Keep the parent agent responsible for coordination, synthesis, final verification, and communicating results.
 - Do not delegate trivial tasks where the overhead would outweigh the benefit.
 
-## Worktrees
-
-- Do all repository work in a linked worktree, never the primary checkout.
-- Take one with the `worktree-slots` skill: `~/.claude/skills/worktree-slots/scripts/wt.sh take <branch>` (`~/.agents/skills/worktree-slots/scripts/wt.sh` on Pi and Codex), then `cd` to the path printed on the last line.
-- Park it with `wt.sh park` as soon as you stop working in it: its PR is opened (everything committed and pushed), its findings are reported (experiment code committed locally), or the work is abandoned. Do not leave parking to the user; to work on the branch again, take a fresh slot.
-- When a repo's `AGENTS.md` prescribes a different worktree recipe, follow the repo.
-
 ## Work Queue
 
 - Treat all work as a FIFO queue of todos, and finish the item in hand before starting the next.
