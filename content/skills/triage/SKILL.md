@@ -71,7 +71,7 @@ Show counts and a one-line summary per item. Let the maintainer pick.
 
 2. **Recommend.** Tell the maintainer your category and state recommendation with reasoning, plus a brief codebase summary relevant to the request - including whether it's already implemented. Wait for direction.
 
-3. **Verify the claim.** Before any grilling, check that the claim holds up. For a bug, reproduce it from the reporter's steps. For a PR, confirm the diff does what it claims - check it out, run the relevant tests or commands. Report what happened: confirmed (with code path), failed, or insufficient detail (a strong `needs-info` signal). A confirmed verification makes a much stronger agent brief.
+3. **Verify the claim.** Before any grilling, check that the claim holds up. For a bug, reproduce it from the reporter's steps. For a PR, confirm the diff does what it claims - check it out, run the relevant tests or commands. Report what happened: confirmed (with code path), failed, or insufficient detail (a strong `needs-info` signal). A confirmed verification makes a much stronger agent brief. If the defect is real in the code but no current input triggers it, it stays a `bug`: look for a seam (for example, extracting the logic into a free function) that lets a unit test reproduce it, and make that failing test the first acceptance criterion. Recommend `wontfix` only when the code behaves as intended.
 
 4. **Grill (if needed).** If the request needs fleshing out, load the `grilling` and `domain-modeling` skills (on Claude Code, call the Skill tool twice, once for each; elsewhere, read each one's `SKILL.md`), then grill it into shape one question at a time, sharpening domain terms and updating `GLOSSARY.md`/ADRs inline as decisions land.
 
