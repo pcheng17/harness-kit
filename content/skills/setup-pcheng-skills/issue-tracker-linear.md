@@ -42,4 +42,6 @@ Create a Linear issue via the MCP create-issue tool, in the configured team/proj
 
 ## When a skill says "fetch the relevant ticket"
 
-Use the MCP get-issue tool with the issue's `ENG-123`-style identifier.
+Use the MCP get-issue tool with the issue's `ENG-123`-style identifier, then the MCP list-comments tool with the same identifier: get-issue does not return comments.
+
+An agent brief comment (from the `triage` skill) is the contract: where it and the issue body disagree, the newest brief wins.

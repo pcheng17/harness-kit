@@ -34,3 +34,5 @@ Create a GitHub issue.
 ## When a skill says "fetch the relevant ticket"
 
 Run `gh issue view <number> --comments`.
+
+An agent brief comment (from the `triage` skill) is the contract: where it and the issue body disagree, the newest brief wins.
