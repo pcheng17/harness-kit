@@ -39,7 +39,13 @@ Give each ticket its **blocking edges** - the other tickets that must complete b
 
 **Wide refactors are the exception to vertical slicing.** A **wide refactor** is one mechanical change - rename a column, retype a shared symbol - whose **blast radius** fans across the whole codebase, so a single edit breaks thousands of call sites at once and no vertical slice can land green. Don't force it into a tracer bullet; sequence it as **expand–contract**. First expand: add the new form beside the old so nothing breaks. Then migrate the call sites over in batches sized by blast radius (per package, per directory), each batch its own ticket blocked by the expand, keeping CI green batch to batch because the old form still exists. Finally contract: delete the old form once no caller remains, in a ticket blocked by every migrate batch. When even the batches can't stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify ticket - green is promised only there.
 
-### 4. Quiz the user
+### 4. Trace every flow
+
+List every flow the plan describes: each sequence of actions from a trigger to an outcome, such as a user request, a scheduled job or a state change. Walk each flow step by step and name the ticket that delivers each step. A step with no ticket gets a new ticket, or an existing ticket's scope widened to cover it. The check is done when every step of every flow names a ticket.
+
+Show the trace alongside the breakdown in step 5, one line per flow.
+
+### 5. Quiz the user
 
 Present the proposed breakdown as a numbered list. For each ticket, show:
 
@@ -55,7 +61,7 @@ Ask the user:
 
 Iterate until the user approves the breakdown.
 
-### 5. Publish the tickets to the configured tracker
+### 6. Publish the tickets to the configured tracker
 
 Publish the approved tickets. **How** depends on the tracker `/setup-pcheng-skills` configured - the tickets are the same either way, only the shape of the blocking edges changes:
 
