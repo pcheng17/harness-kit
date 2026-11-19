@@ -9,7 +9,7 @@ Three-axis review of the diff between the working state and a fixed point:
 - **Spec** - does the code faithfully implement the originating ticket / spec?
 - **Correctness** - does the code work: no bugs, unhandled failures, or security holes?
 
-Each axis runs as a **parallel sub-agent** so they don't pollute each other's context, a fresh verifier then tries to refute each axis's findings, and this skill aggregates what survives. A repo can add a **verification gate** (build, tests, coverage) through its review addendum; see step 3.
+Each axis runs as a **parallel sub-agent** so they don't pollute each other's context, a fresh verifier then tries to refute each axis's findings, and this skill aggregates what survives. Start every sub-agent, reviewers and verifiers alike, with a fresh context window rather than a fork of this conversation: a fork would hand it the author's account of the work. A repo can add a **verification gate** (build, tests, coverage) through its review addendum; see step 3.
 
 ## Process
 
@@ -45,7 +45,7 @@ When step 1 resolved a PR/MR (named or defaulted), also fetch its existing revie
 
 ### 3. Identify the standards sources
 
-Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`.
+Search the repo for every file that documents how code should be written. When `CODING_STANDARDS.md` or `CONTRIBUTING.md` exists, it must be on the list.
 
 If `docs/agents/code-review.md` exists, it is the repo's **review addendum**: per-repo input this skill cannot infer (architecture docs, language-specific lowered-bar moves, deterministic checks, build and test commands). Read it and apply each section it has:
 
