@@ -8,6 +8,8 @@ disable-model-invocation: true
 
 You don't remember every skill, so ask.
 
+Before stating what a skill does or recommending a step be skipped, read that skill's `SKILL.md`: the summaries here are for orientation only.
+
 A **flow** is a path through the skills. Most paths run along one **main flow**, and two **on-ramps** merge onto it. Everything else is standalone, or a vocabulary layer that runs underneath.
 
 ## The main flow: idea → ship
@@ -19,7 +21,7 @@ The route most work travels. You have an idea and want it built.
    - **Yes** → **`/to-spec`** (turn the thread into a spec) → **`/to-tickets`** (split the spec into tracer-bullet tickets, each declaring its **blocking edges**). Work the tickets blockers-first, **`/clear`ing context between each one**: start a fresh session per ticket and kick off **`/implement`** by passing it the spec and the single ticket to work on. Each ticket is self-contained, so the last one's context is disposable.
    - **No** → **`/implement`** right here, in the same context window.
 
-   Either way, **`/implement`** builds each ticket by driving **`/tdd`** internally - one red-green slice at a time - then runs **`/code-simplification`**, a behaviour-preserving cleanup of the diff with tests green after each step, and closes out with **`/code-review`**, a three-axis review (Standards + Spec + Correctness) of the diff, before committing. Reach for **`/tdd`** on its own when you just want to build a concrete behaviour test-first without a full spec, **`/code-simplification`** on its own to tidy a working change, and **`/code-review`** on its own whenever you want to review a branch or PR against a fixed point.
+   Either way, **`/implement`** builds each ticket by driving **`/tdd`** internally - one red-green slice at a time - then runs **`/code-simplification`**, a behaviour-preserving cleanup of the diff with tests green after each step, and closes out with **`/code-review`**, a three-axis review (Standards + Spec + Correctness) of the diff, before opening the PR. Reach for **`/tdd`** on its own when you just want to build a concrete behaviour test-first without a full spec, **`/code-simplification`** on its own to tidy a working change, and **`/code-review`** on its own whenever you want to review a branch or PR against a fixed point.
 
    When the work goes up as a pull request, **`/pr`** shapes the body: the smallest visual that shows the change, before/after evidence that it works, and a one-way or two-way door call. It's model-invoked, so the agent reaches for it whenever it writes a PR.
 
@@ -35,7 +37,7 @@ The limit on this is the **[smart zone](https://www.aihero.dev/ai-coding-diction
 
 A starting situation that generates work, then merges onto the main flow.
 
-- **Bugs and requests piling up** → **`/triage`**. It moves issues through triage roles and produces agent-ready issues, which **`/implement`** later picks up.
+- **Bugs and requests piling up** → **`/triage`**. It moves issues (and external PRs, when the tracker config opts them in) through triage roles and produces agent-ready issues, which **`/implement`** later picks up.
 
   Triage is only for issues **you didn't create** - bug reports, incoming feature requests, anything that arrives raw. Tickets that `/to-tickets` produced are already agent-ready, so **don't triage them**.
 
@@ -53,7 +55,7 @@ Not feature work - upkeep.
 Two model-invoked references that run *beneath* the other skills - each the single source of truth for its vocabulary. Reach for them directly when the **words**, not the process, are the problem; or let the skills above pull them in.
 
 - **`/domain-modeling`** - sharpen the project's *domain* language: challenge a fuzzy term, resolve an overloaded word ("account" doing three jobs), record a hard-to-reverse decision as an ADR. It's the active discipline `/grill-with-docs` drives to keep `GLOSSARY.md` a clean glossary.
-- **`/codebase-design`** - the deep-module vocabulary (module, interface, depth, seam, adapter, leverage, locality) for designing a module's *shape*: a lot of behaviour behind a small interface at a clean seam. `/tdd` and `/improve-codebase-architecture` both speak it.
+- **`/codebase-design`** - the deep-module vocabulary (module, interface, depth, seam, adapter, leverage, locality) for designing a module's *shape*: a lot of behaviour behind a small interface at a clean seam. `/tdd`, `/code-simplification`, and `/improve-codebase-architecture` all speak it.
 
 ## Phase boundaries
 
@@ -73,14 +75,13 @@ The steps around a PR once the code is written.
 
 - **`/pr`** - the template for a PR body (see step 2 of the main flow).
 - **`/address-pr-comments`** - work through a PR's unresolved review threads with you: discuss every thread and get your decision first, then one commit per thread and a reply linking the commit. It never resolves threads; that's left to the reviewer.
-- **`/debug-github-actions`** - pass it a failing GitHub Actions run URL; it finds what actually caused the failure, checks the same job's recent history for flakiness, and reports the root cause.
 - **`/resolve-merge-conflict`** - finish an in-progress merge or rebase: read the primary sources behind each side, resolve every hunk preserving both intents where possible, run the project's checks, and complete it.
 
 ## Standalone
 
 Off the main flow entirely.
 
-- **`/grilling`** - the interview primitive itself: one question at a time, each with a recommended answer; facts are the agent's job and decisions are yours. `/grill-with-docs` is the named way in, and `/triage` and `/improve-codebase-architecture` both run it internally. Reach for it directly when you want the interview with no paper trail - a plan, a design, a piece of writing with no repo under it.
+- **`/grilling`** - the interview primitive itself: numbered rounds, each asking every question that doesn't depend on another still-open one, with a recommended answer for each; facts are the agent's job and decisions are yours. `/grill-with-docs` is the named way in, and `/triage` and `/improve-codebase-architecture` both run it internally. Reach for it directly when you want the interview with no paper trail - a plan, a design, a piece of writing with no repo under it.
 - **`/research`** - delegate reading legwork to a **background agent**: it investigates a question against **primary sources**, then leaves a cited Markdown file in the repo. Keep working while it reads. The file it produces is something to take *into* the main flow at `/grill-with-docs` - research feeds the thinking, it doesn't replace it.
 - **`/writing-for-agents`** - the reference for writing documents agents consume: skills, `AGENTS.md` / `CLAUDE.md`, pointed-at docs. Model-invoked, so the agent loads it whenever it creates or edits one; `/retro` loads it too.
 
