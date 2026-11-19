@@ -1,6 +1,7 @@
 ---
 name: code-simplification
-description: Behaviour-preserving cleanup of a diff. Use after an implementation goes green and before review, or when the user asks to tidy recent changes.
+description: Behaviour-preserving tidy of a diff, on request.
+disable-model-invocation: true
 ---
 
 Simplify the code changed since a fixed point without changing what it does. Simpler means a reader understands it faster, not fewer lines.
@@ -22,15 +23,17 @@ Match the scope against:
 
 A documented repo standard overrides both lists.
 
+Rank the candidates by payoff and keep about the top 5; list the rest under **Noticed, not touched**. "No changes worth making" is a valid result: report it and stop.
+
 ### 3. Read the fence
 
-Before changing or deleting each candidate, apply **Chesterton's Fence**: say what it's responsible for, what calls it and what it calls, which tests pin its behaviour, and why it was written this way. For code that predates the fixed point, the why comes from `git log -L` or `git blame`; for code new in this change, from the ticket or spec. A candidate that predates the fixed point stays as it is if you can't state its reason. An abstraction that is new in this change (a helper, layer, interface, or indirection) gets the opposite default: if the ticket or spec doesn't call for it, collapse it.
+Before changing or deleting each candidate, apply **Chesterton's Fence**: say what it's responsible for, what calls it and what it calls, which tests pin its behaviour, and why it was written this way. For code that predates the fixed point, the why comes from `git log -L` or `git blame`; for code new in this change, from the ticket or spec. A candidate that predates the fixed point stays as it is if you can't state its reason. An abstraction that is new in this change (a helper, layer, interface, or indirection) stays as it is too: report it as a candidate for the user to decide on, with the case for collapsing it.
 
 ### 4. Keep modules deep
 
 Simplify toward **deep modules**, in the `codebase-design` vocabulary:
 
-- The **interface** stays fixed for anything that predates the fixed point, any seam the caller says was agreed, and anything a test calls. An interface new in this change and called only by other code in the change can be reshaped or collapsed. An extracted helper is private to the module it came from.
+- The **interface** stays fixed for anything that predates the fixed point, any seam the caller says was agreed, and anything a test calls. An interface new in this change and called only by other code in the change can be reshaped or collapsed once the user agrees (step 3). An extracted helper is private to the module it came from.
 - To remove a layer, apply the **deletion test**: inline a pass-through whose deletion makes complexity vanish; keep one that concentrates complexity for its callers.
 
 ### 5. Apply one at a time
@@ -45,4 +48,5 @@ Rerun the full test suite, the build, and the linter: tests green, and no build 
 
 - **Applied**: each simplification, with file and the reason it's simpler.
 - **Rejected**: each candidate left alone and why (fence unexplained, went red, would widen an interface).
-- **Noticed, not touched**: anything worth changing outside the scope.
+- **For you to decide**: each new abstraction from step 3, and the case for collapsing it.
+- **Noticed, not touched**: candidates past the cap, and anything worth changing outside the scope.
