@@ -26,6 +26,6 @@ When it returns, check `git diff --name-only <simplification base> HEAD` shows n
 
 Once done, load the `code-review` skill (on Claude Code, call the Skill tool with "code-review"; elsewhere, read its `SKILL.md`) and use it to review the work, passing the same fixed point.
 
-Commit each review fix as its own save point, then push the branch, load the `pr` skill (on Claude Code, call the Skill tool with "pr"; elsewhere, read its `SKILL.md`) to shape the PR body, include the ticket's closing keyword where the tracker supports one (e.g. `Closes #N`), open the PR, then park the slot with `wt.sh park`. Skip or adjust this step if the user says otherwise (e.g. no PR wanted).
+Commit each review fix as its own save point, then push the branch, load the `pr` skill (on Claude Code, call the Skill tool with "pr"; elsewhere, read its `SKILL.md`) to shape the PR body, include the ticket's closing keyword where the tracker supports one (e.g. `Closes #N`), open the PR. Skip or adjust this step if the user says otherwise (e.g. no PR wanted). Park the slot with `wt.sh park` whenever you stop working in it: once the PR is open, or when the work is abandoned or no PR is wanted.
 
 End with the **Noticed, not touched** list (if any), then a brief FYI that you parked the slot (`wt.sh take <branch>` resumes it; `wt.sh prune` reclaims disk), and `/retro` if the session felt bumpy.
