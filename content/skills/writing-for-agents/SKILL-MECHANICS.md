@@ -28,7 +28,7 @@ When a step needs a model-invoked skill, write: Load the `grilling` skill (on Cl
 
 A user-invoked skill can't be loaded this way. When a step depends on one, tell the user to run it: "If not, tell the user to run `/setup-pcheng-skills`." Router prose that names skills for the human to pick from isn't invoking anything, so it keeps `/name` labels.
 
-Ask for a sub-agent as "spawn a sub-agent", not by a harness's tool name (`Agent`, `spawn_agent`).
+Ask for a sub-agent as "spawn a sub-agent with a fresh context window", not by a harness's tool name (`Agent`, `spawn_agent`). Some harnesses (Codex, for one) fork the parent conversation by default, and a fork inherits the context the sub-agent was meant to escape.
 
 ## Splitting by invocation
 
