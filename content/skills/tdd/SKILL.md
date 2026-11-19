@@ -5,7 +5,7 @@ description: Test-driven development. Use when the user wants to build features 
 
 # Test-Driven Development
 
-TDD is the red → green loop. This skill is the reference that makes that loop produce tests worth keeping: what a good test is, where tests go, the anti-patterns, and the rules of the loop. Every section applies on every cycle - consult them before and during the loop, not after.
+TDD is the red → green → refactor loop. This skill is the reference that makes that loop produce tests worth keeping: what a good test is, where tests go, the anti-patterns, and the rules of the loop. Every section applies on every cycle - consult them before and during the loop, not after.
 
 When exploring the codebase, read `GLOSSARY.md` (if it exists) so test names and interface vocabulary match the project's domain language, and respect ADRs in the area you're touching.
 
@@ -33,4 +33,4 @@ Ask: "What's the public interface, and which seams should we test?"
 
 - **Red before green.** Write the failing test first, then only enough code to pass it. Don't anticipate future tests or add speculative features.
 - **One slice at a time.** One seam, one test, one minimal implementation per cycle.
-- **Refactoring is not part of the loop.** It belongs to the simplification pass after the suite is green (see the `code-simplification` skill), not the red → green implementation cycle.
+- **Refactor on green.** Once a slice is green, tidy that slice's code against the smell baseline in step 3 of the `code-review` skill (`../code-review/SKILL.md`, relative to this skill's folder; read the list, don't run the review), while you still know why every piece is there. Keep it small and scoped to the slice just written. Tests stay unchanged and green: an edit that needs a test change isn't a refactor.
