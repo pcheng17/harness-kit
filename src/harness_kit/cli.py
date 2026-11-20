@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -16,6 +18,9 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 GENERATED = ROOT / ".generated"
 COMMON_INSTRUCTIONS = ROOT / "content/instructions/AGENTS.md"
+INSTRUCTIONS_START = b"<!-- BEGIN HARNESS KIT INSTRUCTIONS -->"
+INSTRUCTIONS_END = b"<!-- END HARNESS KIT INSTRUCTIONS -->"
+INSTRUCTION_MARKERS = re.compile(rb"(?m)^(" + INSTRUCTIONS_START + b"|" + INSTRUCTIONS_END + rb")\r?(?:\n|$)")
 CLAUDE_STATUSLINE = ROOT / "content/claude/statusline.sh"
 STATUSLINE_COMMAND = "~/.claude/statusline.sh"
 STATUSLINE_HINT = (
@@ -58,11 +63,27 @@ class Link:
 
 
 @dataclass(frozen=True)
+class InstructionSnapshot:
+    device: int
+    inode: int
+    mode: int
+    content: bytes | str
+
+
+@dataclass(frozen=True)
+class InstructionWrite:
+    destination: Path
+    content: bytes
+    original: InstructionSnapshot | None = None
+
+
+@dataclass(frozen=True)
 class Operation:
     action: str
     detail: str = ""
     link: Link | None = None
     source: str | None = None
+    instruction: InstructionWrite | None = None
 
 
 def home() -> Path:
@@ -366,17 +387,12 @@ def desired_links(harness: str, agents: list[Agent], components: frozenset[str])
     user_home = home()
     links: list[Link] = []
     if harness in ("all", "codex"):
-        if "instructions" in components:
-            destination_root = codex_home()
-            links.append(Link(destination_root / "AGENTS.md", COMMON_INSTRUCTIONS))
         if "agents" in components:
             destination_root = codex_home() / "agents"
             for agent in agents:
                 agent_file = GENERATED / "codex/agents" / f"{agent.name}.toml"
                 links.append(Link(destination_root / agent_file.name, agent_file))
     if harness in ("all", "claude"):
-        if "instructions" in components:
-            links.append(Link(user_home / ".claude/CLAUDE.md", COMMON_INSTRUCTIONS))
         if "agents" in components:
             for agent in agents:
                 agent_file = GENERATED / "claude/agents" / f"{agent.name}.md"
@@ -391,12 +407,6 @@ def desired_links(harness: str, agents: list[Agent], components: frozenset[str])
         # Pi and Codex intentionally consume the same user-level skill links.
         if "skills" in components:
             links.extend(shared_skill_links(user_home))
-    if harness in ("all", "pi"):
-        if "instructions" in components:
-            links.extend((
-                Link(user_home / ".agents/AGENTS.md", COMMON_INSTRUCTIONS),
-                Link(user_home / ".pi/agent/AGENTS.md", COMMON_INSTRUCTIONS),
-            ))
     return links
 
 
@@ -451,6 +461,116 @@ def link_operations(harness: str, agents: list[Agent], components: frozenset[str
         else:
             operations.append(Operation("conflict", "destination target differs", link))
     return operations
+
+
+def instruction_destinations(harness: str) -> list[Path]:
+    user_home = home()
+    destinations: list[Path] = []
+    if harness in ("all", "codex"):
+        destinations.append(codex_home() / "AGENTS.md")
+    if harness in ("all", "claude"):
+        destinations.append(user_home / ".claude/CLAUDE.md")
+    if harness in ("all", "pi"):
+        destinations.extend((user_home / ".agents/AGENTS.md", user_home / ".pi/agent/AGENTS.md"))
+    return list(dict.fromkeys(destinations))
+
+
+def read_instruction_destination(path: Path) -> InstructionSnapshot | None:
+    try:
+        status = path.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(status.st_mode):
+        content = os.readlink(path)
+        return InstructionSnapshot(status.st_dev, status.st_ino, status.st_mode, content)
+    if not stat.S_ISREG(status.st_mode):
+        raise KitError("not a regular instruction file")
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode) or not os.path.samestat(status, opened):
+            raise KitError("instruction destination changed while reading")
+        return InstructionSnapshot(opened.st_dev, opened.st_ino, opened.st_mode, stream.read())
+
+
+def merge_instruction_section(current: bytes, section: bytes) -> tuple[str, bytes]:
+    markers = list(INSTRUCTION_MARKERS.finditer(current))
+    if not markers:
+        separator = b""
+        if current:
+            separator = b"\n" if current.endswith(b"\n") else b"\n\n"
+        return "insert", current + separator + section
+    if [marker[1] for marker in markers] != [INSTRUCTIONS_START, INSTRUCTIONS_END]:
+        raise KitError("malformed or duplicate instruction section markers")
+    updated = current[:markers[0].start()] + section + current[markers[1].end():]
+    return ("noop" if updated == current else "refresh"), updated
+
+
+def instruction_operations(harness: str) -> list[Operation]:
+    try:
+        source = COMMON_INSTRUCTIONS.read_bytes()
+    except OSError as error:
+        raise KitError(f"could not read common instructions: {error}") from error
+    if INSTRUCTION_MARKERS.search(source):
+        raise KitError(f"common instructions contain reserved section markers: {COMMON_INSTRUCTIONS}")
+    body = source if source.endswith(b"\n") else source + b"\n"
+    section = INSTRUCTIONS_START + b"\n" + body + INSTRUCTIONS_END + b"\n"
+    canonical = COMMON_INSTRUCTIONS.resolve()
+    operations: list[Operation] = []
+    for path in instruction_destinations(harness):
+        validate_managed_ancestors(path)
+        try:
+            content = section
+            if path == canonical:
+                raise KitError("destination is the canonical instructions source")
+            original = read_instruction_destination(path)
+            if original is None:
+                action = "create"
+            elif isinstance(original.content, str):
+                if path.resolve(strict=True) != canonical:
+                    raise KitError("foreign symlink")
+                action = "migrate"
+            else:
+                action, content = merge_instruction_section(original.content, section)
+            operations.append(Operation(action, instruction=InstructionWrite(path, content, original)))
+        except (RuntimeError, OSError) as error:
+            operations.append(Operation("conflict", f"{path}: {error}"))
+    return operations
+
+
+def write_instruction_file(write: InstructionWrite) -> None:
+    path = write.destination
+    validate_managed_ancestors(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        validate_managed_ancestors(path)
+        if write.original is None:
+            with path.open("xb") as stream:
+                stream.write(write.content)
+            return
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(write.content)
+                if stat.S_ISREG(write.original.mode):
+                    os.fchmod(stream.fileno(), stat.S_IMODE(write.original.mode))
+            validate_managed_ancestors(path)
+            try:
+                unchanged = read_instruction_destination(path) == write.original
+                if unchanged and stat.S_ISLNK(write.original.mode):
+                    unchanged = path.resolve(strict=True) == COMMON_INSTRUCTIONS.resolve()
+            except (RuntimeError, OSError):
+                unchanged = False
+            if not unchanged:
+                raise KitError(f"refusing to replace substituted destination: {path}")
+            temporary.replace(path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+    except FileExistsError as error:
+        raise KitError(f"refusing to replace substituted destination: {path}") from error
+    except OSError as error:
+        raise KitError(f"could not write instructions at {path}: {error}") from error
 
 
 def read_pi_settings(path: Path) -> dict[str, Any]:
@@ -545,6 +665,8 @@ def install_plan(harness: str, agents: list[Agent], components: frozenset[str]) 
         generated_paths = [GENERATED / selected / "agents" for selected in HARNESSES if harness in ("all", selected)]
         operations.append(Operation("render", f"generate selected agent trees at {', '.join(map(str, generated_paths))}"))
     operations.extend(pi_content)
+    if "instructions" in components:
+        operations.extend(instruction_operations(harness))
     operations.extend(link_operations(harness, agents, components))
     operations.extend(pi_extensions)
     return operations
@@ -556,6 +678,8 @@ def print_plan(operations: list[Operation]) -> None:
         action = f"[{operation.action.upper()}]"
         if operation.link is not None:
             print(f"{action:12} {operation.link.destination} -> {operation.link.target}{suffix}")
+        elif operation.instruction is not None:
+            print(f"{action:12} {operation.instruction.destination}{suffix}")
         elif operation.source is not None:
             print(f"{action:12} {operation.source}{suffix}")
         else:
@@ -615,6 +739,8 @@ def install(harness: str, components: frozenset[str]) -> int:
                 if operation.source not in PI_EXTENSIONS:
                     raise
                 extension_failures.append(str(error))
+        elif operation.instruction is not None and operation.action != "noop":
+            write_instruction_file(operation.instruction)
         elif operation.action == "create":
             validate_operation_preconditions(operation)
             assert operation.link is not None
