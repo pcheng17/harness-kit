@@ -22,7 +22,14 @@ STATUSLINE_HINT = (
     'hint: harness-kit never edits ~/.claude/settings.json; to enable the status line, set '
     '"statusLine": {"type": "command", "command": "~/.claude/statusline.sh"} there yourself'
 )
-COMPONENT_CHOICES = ("skills", "agents", "instructions", "statusline")
+COMPONENT_CHOICES = ("skills", "agents", "instructions", "statusline", "extensions")
+PI_EXTENSIONS = (
+    "npm:pi-subagents",
+    "npm:pi-polish",
+    "npm:@juicesharp/rpiv-ask-user-question",
+    "npm:@juicesharp/rpiv-btw",
+    "npm:@juicesharp/rpiv-todo",
+)
 COMPONENTS = frozenset(COMPONENT_CHOICES)
 CAPABILITY_TOOLS = {
     "claude": {"read": "Read", "grep": "Grep", "find": "Glob", "bash": "Bash", "edit": "Edit", "write": "Write"},
@@ -55,6 +62,7 @@ class Operation:
     action: str
     detail: str = ""
     link: Link | None = None
+    source: str | None = None
 
 
 def home() -> Path:
@@ -462,6 +470,42 @@ def read_pi_settings(path: Path) -> dict[str, Any]:
     return settings
 
 
+def pi_settings_path() -> Path:
+    value = os.environ.get("PI_CODING_AGENT_DIR")
+    if not value:
+        return home() / ".pi/agent/settings.json"
+    directory = Path(value)
+    if value == "~" or value.startswith("~/"):
+        directory = home() / Path(value).relative_to("~")
+    if not directory.is_absolute() or ".." in directory.parts:
+        raise KitError("PI_CODING_AGENT_DIR must be an absolute or home-relative path without '..' components")
+    return directory / "settings.json"
+
+
+def pi_package_operations(components: frozenset[str]) -> tuple[list[Operation], list[Operation]]:
+    settings_path = pi_settings_path()
+    packages = read_pi_settings(settings_path).get("packages", [])
+    if not isinstance(packages, list):
+        raise KitError(f"Pi settings packages must be a list: {settings_path}")
+    sources = [entry.get("source") if isinstance(entry, dict) else entry for entry in packages]
+    sources = [source.strip() for source in sources if isinstance(source, str) and source.strip()]
+    content = []
+    if "agents" in components:
+        # Pi can store local paths relative to its settings directory.
+        paths = (settings_path.parent / (home() / source[2:] if source.startswith("~/") else source) for source in sources)
+        registered = any(Path(os.path.abspath(path)) == ROOT for path in paths)
+        content.append(Operation("noop" if registered else "pi install", "Pi agent package", source=str(ROOT)))
+    extensions = []
+    if "extensions" in components:
+        npm_specs = [source.removeprefix("npm:").strip() for source in sources if source.startswith("npm:")]
+        for package in PI_EXTENSIONS:
+            # Compare npm package identity, ignoring version or tag, including for scoped packages.
+            name = package.removeprefix("npm:")
+            registered = any(spec == name or spec.startswith(name + "@") for spec in npm_specs)
+            extensions.append(Operation("noop" if registered else "pi install", "Pi extension", source=package))
+    return content, extensions
+
+
 def statusline_hints(harness: str, components: frozenset[str]) -> list[str]:
     """Explain why Claude is not using the status line; empty when it is.
 
@@ -492,17 +536,17 @@ def statusline_hints(harness: str, components: frozenset[str]) -> list[str]:
 
 
 def install_plan(harness: str, agents: list[Agent], components: frozenset[str]) -> list[Operation]:
-    """The ordered Install plan: generation, Pi bootstrap, then links."""
+    """The ordered install plan: content first, then third-party extensions."""
+    pi_content, pi_extensions = [], []
+    if harness in ("all", "pi") and components.intersection(("agents", "extensions")):
+        pi_content, pi_extensions = pi_package_operations(components)
     operations: list[Operation] = []
     if "agents" in components:
         generated_paths = [GENERATED / selected / "agents" for selected in HARNESSES if harness in ("all", selected)]
         operations.append(Operation("render", f"generate selected agent trees at {', '.join(map(str, generated_paths))}"))
-        if harness in ("all", "pi"):
-            operations.extend((
-                Operation("npm ci", "install npm dependencies"),
-                Operation("pi install", "register Pi package"),
-            ))
+    operations.extend(pi_content)
     operations.extend(link_operations(harness, agents, components))
+    operations.extend(pi_extensions)
     return operations
 
 
@@ -512,6 +556,8 @@ def print_plan(operations: list[Operation]) -> None:
         action = f"[{operation.action.upper()}]"
         if operation.link is not None:
             print(f"{action:12} {operation.link.destination} -> {operation.link.target}{suffix}")
+        elif operation.source is not None:
+            print(f"{action:12} {operation.source}{suffix}")
         else:
             print(f"{action:12} {operation.detail}")
 
@@ -556,13 +602,19 @@ def install(harness: str, components: frozenset[str]) -> int:
         print(hint)
     if any(operation.action == "conflict" for operation in operations):
         raise KitError("refusing to overwrite unmanaged destinations")
+    extension_failures: list[str] = []
     for operation in operations:
         if operation.action == "render":
             materialize(files, harness)
-        elif operation.action == "npm ci":
-            run(["npm", "ci"])
         elif operation.action == "pi install":
-            run(["pi", "install", str(ROOT)])
+            assert operation.source is not None
+            read_pi_settings(pi_settings_path())
+            try:
+                run(["pi", "install", operation.source])
+            except KitError as error:
+                if operation.source not in PI_EXTENSIONS:
+                    raise
+                extension_failures.append(str(error))
         elif operation.action == "create":
             validate_operation_preconditions(operation)
             assert operation.link is not None
@@ -575,19 +627,16 @@ def install(harness: str, components: frozenset[str]) -> int:
                 path.symlink_to(operation.link.target)
             except FileExistsError as error:
                 raise KitError(f"refusing to replace substituted destination: {path}") from error
+    if extension_failures:
+        raise KitError("Pi extension installation failed after content operations:\n" + "\n".join(extension_failures))
     return 0
 
 
 def check(harness: str, components: frozenset[str]) -> int:
     policy, agents = load_catalog(harness, components)
     files = render(policy, agents, harness) if agents else {}
-    operations = link_operations(harness, agents, components)
+    operations = [operation for operation in install_plan(harness, agents, components) if operation.action != "render"]
     drift = ("agents" in components and not verify_generated(files, harness)) or any(operation.action != "noop" for operation in operations)
-    if harness in ("all", "pi") and "agents" in components:
-        settings = read_pi_settings(home() / ".pi/agent/settings.json")
-        packages = settings.get("packages", [])
-        installed = isinstance(packages, list) and str(ROOT) in packages
-        drift = drift or not installed
     hints = statusline_hints(harness, components)
     drift = drift or bool(hints)
     if drift:
