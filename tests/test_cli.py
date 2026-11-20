@@ -872,15 +872,21 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(destination.resolve(), self.project / "content/instructions/AGENTS.md")
 
-    def test_install_refuses_foreign_common_instruction_destinations(self) -> None:
+    def test_install_preserves_other_global_instructions(self) -> None:
         for harness, relative_destination in (("claude", ".claude/CLAUDE.md"), ("pi", ".agents/AGENTS.md"), ("pi", ".pi/agent/AGENTS.md")):
             with self.subTest(destination=relative_destination), temporary_sandbox() as sandbox:
                 foreign = sandbox.root / "home" / relative_destination
                 foreign.parent.mkdir(parents=True)
-                foreign.write_text("foreign\n")
-                result = invoke(sandbox, "install", "--harness", harness)
-                self.assertEqual(result.returncode, 2)
-                self.assertEqual(foreign.read_text(), "foreign\n")
+                original = b"# Other instructions\r\nKeep this text, with no trailing newline"
+                foreign.write_bytes(original)
+                preview = invoke(sandbox, "preview", "--harness", harness, "--component", "instructions")
+                self.assertEqual(preview.returncode, 0, preview.stderr)
+                self.assertIn("[INSERT]", preview.stdout)
+                self.assertEqual(foreign.read_bytes(), original)
+                result = invoke(sandbox, "install", "--harness", harness, "--component", "instructions")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(foreign.read_bytes().startswith(original + b"\n"))
+                self.assert_managed_instructions(foreign, sandbox.project)
                 self.assertFalse((sandbox.root / "commands").exists())
 
     def test_install_foreign_destination_conflicts_and_blocks_other_destinations(self) -> None:
@@ -1200,14 +1206,31 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn("[NOOP]", result.stdout)
         self.assertNotIn("[CREATE]", result.stdout)
 
-    def test_codex_instruction_foreign_file_and_symlink_conflicts_are_preserved(self) -> None:
+    def test_codex_instruction_refresh_preserves_bytes_outside_section(self) -> None:
         destination = self.path / "home/codex-home/AGENTS.md"
         destination.parent.mkdir(parents=True)
-        destination.write_text("protected\n")
-        result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions")
-        self.assertEqual(result.returncode, 2)
-        self.assertEqual(destination.read_text(), "protected\n")
-        destination.unlink()
+        prefix = b"# Other instructions\r\n\r\n"
+        suffix = b"\r\n# More instructions\r\nNo trailing newline"
+        begin = b"<!-- BEGIN HARNESS KIT INSTRUCTIONS -->\n"
+        end = b"<!-- END HARNESS KIT INSTRUCTIONS -->\n"
+        destination.write_bytes(prefix + begin + b"stale\n" + end + suffix)
+        scope = ("--harness", "codex", "--component", "instructions")
+        self.assertEqual(invoke(self.sandbox, "check", *scope).returncode, 1)
+        result = invoke(self.sandbox, "install", *scope)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[REFRESH]", result.stdout)
+        source = self.project / "content/instructions/AGENTS.md"
+        self.assertEqual(destination.read_bytes(), prefix + begin + source.read_bytes() + end + suffix)
+        self.assertEqual(invoke(self.sandbox, "check", *scope).returncode, 0)
+        before = destination.stat()
+        result = invoke(self.sandbox, "install", *scope)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("[NOOP]", result.stdout)
+        self.assertEqual((destination.stat().st_ino, destination.stat().st_mtime_ns), (before.st_ino, before.st_mtime_ns))
+
+    def test_codex_instruction_foreign_symlink_conflict_is_preserved(self) -> None:
+        destination = self.path / "home/codex-home/AGENTS.md"
+        destination.parent.mkdir(parents=True)
         foreign = self.path / "foreign"
         foreign.write_text("foreign\n")
         destination.symlink_to(foreign)

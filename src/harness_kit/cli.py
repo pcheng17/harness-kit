@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -18,6 +20,7 @@ GENERATED = ROOT / ".generated"
 COMMON_INSTRUCTIONS = ROOT / "content/instructions/AGENTS.md"
 INSTRUCTIONS_START = b"<!-- BEGIN HARNESS KIT INSTRUCTIONS -->"
 INSTRUCTIONS_END = b"<!-- END HARNESS KIT INSTRUCTIONS -->"
+INSTRUCTION_MARKERS = re.compile(rb"(?m)^(" + INSTRUCTIONS_START + b"|" + INSTRUCTIONS_END + rb")\r?(?:\n|$)")
 CLAUDE_STATUSLINE = ROOT / "content/claude/statusline.sh"
 STATUSLINE_COMMAND = "~/.claude/statusline.sh"
 STATUSLINE_HINT = (
@@ -60,9 +63,18 @@ class Link:
 
 
 @dataclass(frozen=True)
+class InstructionSnapshot:
+    device: int
+    inode: int
+    mode: int
+    content: bytes
+
+
+@dataclass(frozen=True)
 class InstructionWrite:
     destination: Path
     content: bytes
+    original: InstructionSnapshot | None = None
 
 
 @dataclass(frozen=True)
@@ -463,33 +475,86 @@ def instruction_destinations(harness: str) -> list[Path]:
     return list(dict.fromkeys(destinations))
 
 
+def read_instruction_file(path: Path) -> InstructionSnapshot:
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+        status = os.fstat(stream.fileno())
+        if not stat.S_ISREG(status.st_mode):
+            raise KitError(f"not a regular file: {path}")
+        return InstructionSnapshot(status.st_dev, status.st_ino, status.st_mode, stream.read())
+
+
+def merge_instruction_section(current: bytes, section: bytes) -> tuple[str, bytes]:
+    markers = list(INSTRUCTION_MARKERS.finditer(current))
+    if not markers:
+        separator = b""
+        if current:
+            separator = b"\n" if current.endswith(b"\n") else b"\n\n"
+        return "insert", current + separator + section
+    if [marker[1] for marker in markers] != [INSTRUCTIONS_START, INSTRUCTIONS_END]:
+        raise KitError("malformed or duplicate instruction section markers")
+    updated = current[:markers[0].start()] + section + current[markers[1].end():]
+    return ("noop" if updated == current else "refresh"), updated
+
+
 def instruction_operations(harness: str) -> list[Operation]:
-    source = COMMON_INSTRUCTIONS.read_bytes()
-    section = INSTRUCTIONS_START + b"\n" + source + (b"" if source.endswith(b"\n") else b"\n") + INSTRUCTIONS_END + b"\n"
+    try:
+        source = COMMON_INSTRUCTIONS.read_bytes()
+    except OSError as error:
+        raise KitError(f"could not read common instructions: {error}") from error
+    if INSTRUCTION_MARKERS.search(source):
+        raise KitError(f"common instructions contain reserved section markers: {COMMON_INSTRUCTIONS}")
+    body = source if source.endswith(b"\n") else source + b"\n"
+    section = INSTRUCTIONS_START + b"\n" + body + INSTRUCTIONS_END + b"\n"
     operations: list[Operation] = []
     for path in instruction_destinations(harness):
         validate_managed_ancestors(path)
-        if path.is_symlink():
-            action = "noop" if link_target(path) == COMMON_INSTRUCTIONS.resolve() else "conflict"
-        elif not path.exists():
-            action = "create"
-        elif path.is_file() and path.read_bytes() == section and path != COMMON_INSTRUCTIONS.resolve():
-            action = "noop"
-        else:
-            action = "conflict"
-        detail = "destination differs" if action == "conflict" else ""
-        operations.append(Operation(action, detail, instruction=InstructionWrite(path, section)))
+        try:
+            original = None
+            content = section
+            if path == COMMON_INSTRUCTIONS.resolve():
+                raise KitError("destination is the canonical instructions source")
+            if path.is_symlink():
+                if link_target(path) != COMMON_INSTRUCTIONS.resolve():
+                    raise KitError("foreign symlink")
+                action = "noop"
+            elif not path.exists():
+                action = "create"
+            else:
+                original = read_instruction_file(path)
+                action, content = merge_instruction_section(original.content, section)
+            operations.append(Operation(action, instruction=InstructionWrite(path, content, original)))
+        except (KitError, OSError) as error:
+            operations.append(Operation("conflict", f"{path}: {error}"))
     return operations
 
 
-def create_instruction_file(write: InstructionWrite) -> None:
+def write_instruction_file(write: InstructionWrite) -> None:
     path = write.destination
     validate_managed_ancestors(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    validate_managed_ancestors(path)
     try:
-        with path.open("xb") as stream:
-            stream.write(write.content)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        validate_managed_ancestors(path)
+        if write.original is None:
+            with path.open("xb") as stream:
+                stream.write(write.content)
+            return
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(write.content)
+                os.fchmod(stream.fileno(), stat.S_IMODE(write.original.mode))
+            validate_managed_ancestors(path)
+            try:
+                unchanged = read_instruction_file(path) == write.original
+            except (KitError, OSError):
+                unchanged = False
+            if not unchanged:
+                raise KitError(f"refusing to replace substituted destination: {path}")
+            temporary.replace(path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
     except FileExistsError as error:
         raise KitError(f"refusing to replace substituted destination: {path}") from error
     except OSError as error:
@@ -662,8 +727,8 @@ def install(harness: str, components: frozenset[str]) -> int:
                 if operation.source not in PI_EXTENSIONS:
                     raise
                 extension_failures.append(str(error))
-        elif operation.action == "create" and operation.instruction is not None:
-            create_instruction_file(operation.instruction)
+        elif operation.instruction is not None and operation.action != "noop":
+            write_instruction_file(operation.instruction)
         elif operation.action == "create":
             validate_operation_preconditions(operation)
             assert operation.link is not None
