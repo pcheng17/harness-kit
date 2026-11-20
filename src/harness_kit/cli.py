@@ -67,7 +67,7 @@ class InstructionSnapshot:
     device: int
     inode: int
     mode: int
-    content: bytes
+    content: bytes | str
 
 
 @dataclass(frozen=True)
@@ -475,12 +475,21 @@ def instruction_destinations(harness: str) -> list[Path]:
     return list(dict.fromkeys(destinations))
 
 
-def read_instruction_file(path: Path) -> InstructionSnapshot:
+def read_instruction_destination(path: Path) -> InstructionSnapshot | None:
+    try:
+        status = path.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(status.st_mode):
+        content = os.readlink(path)
+        return InstructionSnapshot(status.st_dev, status.st_ino, status.st_mode, content)
+    if not stat.S_ISREG(status.st_mode):
+        raise KitError("not a regular instruction file")
     with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
-        status = os.fstat(stream.fileno())
-        if not stat.S_ISREG(status.st_mode):
-            raise KitError(f"not a regular file: {path}")
-        return InstructionSnapshot(status.st_dev, status.st_ino, status.st_mode, stream.read())
+        opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode) or not os.path.samestat(status, opened):
+            raise KitError("instruction destination changed while reading")
+        return InstructionSnapshot(opened.st_dev, opened.st_ino, opened.st_mode, stream.read())
 
 
 def merge_instruction_section(current: bytes, section: bytes) -> tuple[str, bytes]:
@@ -505,25 +514,25 @@ def instruction_operations(harness: str) -> list[Operation]:
         raise KitError(f"common instructions contain reserved section markers: {COMMON_INSTRUCTIONS}")
     body = source if source.endswith(b"\n") else source + b"\n"
     section = INSTRUCTIONS_START + b"\n" + body + INSTRUCTIONS_END + b"\n"
+    canonical = COMMON_INSTRUCTIONS.resolve()
     operations: list[Operation] = []
     for path in instruction_destinations(harness):
         validate_managed_ancestors(path)
         try:
-            original = None
             content = section
-            if path == COMMON_INSTRUCTIONS.resolve():
+            if path == canonical:
                 raise KitError("destination is the canonical instructions source")
-            if path.is_symlink():
-                if link_target(path) != COMMON_INSTRUCTIONS.resolve():
-                    raise KitError("foreign symlink")
-                action = "noop"
-            elif not path.exists():
+            original = read_instruction_destination(path)
+            if original is None:
                 action = "create"
+            elif isinstance(original.content, str):
+                if path.resolve(strict=True) != canonical:
+                    raise KitError("foreign symlink")
+                action = "migrate"
             else:
-                original = read_instruction_file(path)
                 action, content = merge_instruction_section(original.content, section)
             operations.append(Operation(action, instruction=InstructionWrite(path, content, original)))
-        except (KitError, OSError) as error:
+        except (RuntimeError, OSError) as error:
             operations.append(Operation("conflict", f"{path}: {error}"))
     return operations
 
@@ -543,11 +552,14 @@ def write_instruction_file(write: InstructionWrite) -> None:
             with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
                 temporary = Path(stream.name)
                 stream.write(write.content)
-                os.fchmod(stream.fileno(), stat.S_IMODE(write.original.mode))
+                if stat.S_ISREG(write.original.mode):
+                    os.fchmod(stream.fileno(), stat.S_IMODE(write.original.mode))
             validate_managed_ancestors(path)
             try:
-                unchanged = read_instruction_file(path) == write.original
-            except (KitError, OSError):
+                unchanged = read_instruction_destination(path) == write.original
+                if unchanged and stat.S_ISLNK(write.original.mode):
+                    unchanged = path.resolve(strict=True) == COMMON_INSTRUCTIONS.resolve()
+            except (RuntimeError, OSError):
                 unchanged = False
             if not unchanged:
                 raise KitError(f"refusing to replace substituted destination: {path}")

@@ -864,13 +864,17 @@ class HarnessKitTests(unittest.TestCase):
             self.assert_managed_instructions(sandbox.root / "home/.agents/AGENTS.md", sandbox.project)
             self.assert_managed_instructions(sandbox.root / "home/.pi/agent/AGENTS.md", sandbox.project)
 
-    def test_matching_link_is_stateless_noop(self) -> None:
+    def test_pi_install_migrates_a_relative_common_instruction_link(self) -> None:
         destination = self.path / "home/.agents/AGENTS.md"
         destination.parent.mkdir(parents=True)
-        destination.symlink_to(self.project / "content/instructions/AGENTS.md")
+        source = self.project / "content/instructions/AGENTS.md"
+        original = source.read_bytes()
+        destination.symlink_to(os.path.relpath(source, destination.parent))
         result = invoke(self.sandbox, "install", "--harness", "pi")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(destination.resolve(), self.project / "content/instructions/AGENTS.md")
+        self.assertIn("[MIGRATE]", result.stdout)
+        self.assert_managed_instructions(destination)
+        self.assertEqual(source.read_bytes(), original)
 
     def test_install_preserves_other_global_instructions(self) -> None:
         for harness, relative_destination in (("claude", ".claude/CLAUDE.md"), ("pi", ".agents/AGENTS.md"), ("pi", ".pi/agent/AGENTS.md")):
@@ -1199,12 +1203,19 @@ class HarnessKitTests(unittest.TestCase):
         result = invoke(self.sandbox, "check", "--harness", "codex", "--component", "instructions")
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_codex_instruction_matching_link_is_noop(self) -> None:
-        self.assertEqual(invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions").returncode, 0)
-        result = invoke(self.sandbox, "preview", "--harness", "codex", "--component", "instructions")
+    def test_codex_instruction_matching_link_needs_migration(self) -> None:
+        destination = self.path / "home/codex-home/AGENTS.md"
+        destination.parent.mkdir(parents=True)
+        destination.symlink_to(self.project / "content/instructions/AGENTS.md")
+        scope = ("--harness", "codex", "--component", "instructions")
+        result = invoke(self.sandbox, "preview", *scope)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("[NOOP]", result.stdout)
-        self.assertNotIn("[CREATE]", result.stdout)
+        self.assertIn("[MIGRATE]", result.stdout)
+        self.assertEqual(invoke(self.sandbox, "check", *scope).returncode, 1)
+        self.assertTrue(destination.is_symlink())
+        self.assertEqual(invoke(self.sandbox, "install", *scope).returncode, 0)
+        self.assert_managed_instructions(destination)
+        self.assertEqual(invoke(self.sandbox, "check", *scope).returncode, 0)
 
     def test_codex_instruction_refresh_preserves_bytes_outside_section(self) -> None:
         destination = self.path / "home/codex-home/AGENTS.md"
