@@ -20,23 +20,35 @@ uv run harness-kit install
 
 The repository policy provides complete defaults. To customize an individual agent on one machine, create `$XDG_CONFIG_HOME/harness-kit/config.toml` (or `~/.config/harness-kit/config.toml` when `XDG_CONFIG_HOME` is unset) manually. Reload active harnesses afterward, for example `/reload` in Pi.
 
-### Pi subagents
+### Pi content and extensions
 
-The Pi configuration depends on the [`pi-subagents`](https://github.com/nicobailon/pi-subagents) extension. Harness Kit installs its custom Pi agents alongside the extension's built-in agents and leaves all `subagents` settings user-managed. It also loads [`pi-polish`](https://github.com/Pringled/pi-extensions/tree/main/packages/pi-polish) from the pinned npm dependency to render compact tool summaries and colored edit diffs. Both extensions are exposed through this checkout's Pi package when the Pi `agents` component is installed.
-
-The narrowest invocation that installs the Pi package and agents is:
+A full Pi install deploys content first, then installs missing extensions using the local `pi` command. The checkout's Pi package contains only the rendered agent definitions. To deploy skills and agent definitions without installing any extensions:
 
 ```bash
-uv run harness-kit install --harness pi --component agents
+uv run harness-kit install --harness pi --component skills --component agents
 ```
+
+To install or retry just the extensions:
+
+```bash
+uv run harness-kit install --harness pi --component extensions
+```
+
+Harness Kit requests `pi-subagents`, `pi-polish`, and the `@juicesharp` packages `rpiv-ask-user-question`, `rpiv-btw`, and `rpiv-todo` without version pins. Existing npm package entries in Pi's personal settings are kept as-is, including version pins and resource filters. `check` verifies registration, not runtime compatibility.
+
+An unpinned install can select a release that your Pi cannot load. Use `pi install 'npm:package-name@<compatible-version>'` with the actual package name and version on that machine, then reload Pi. Harness Kit will leave the pin alone. If Pi reports an install failure, Harness Kit still attempts the other extensions and exits non-zero; content already installed is unaffected.
+
+When upgrading an existing checkout, extensions previously loaded from its `node_modules` are now installed as separate Pi packages. If an older machine needs a specific release, register that pin with Pi before your next full Harness Kit install. The checkout no longer needs `npm ci` or `node_modules`.
+
+Your rendered agents are usable by [`pi-subagents`](https://github.com/nicobailon/pi-subagents) versions that support package agent discovery. Harness Kit leaves your `subagents` settings user-managed.
 
 ## Commands
 
-- `uv run harness-kit preview [--harness claude|pi|codex|all] [--component skills|agents|instructions|statusline]` prints the desired deployment without changing anything.
-- `uv run harness-kit install [--harness claude|pi|codex|all] [--component skills|agents|instructions|statusline]` renders selected agents, installs Pi dependencies and package registration only when Pi agents are selected, and handles each selected destination as create, noop (already targeting the intended source), or conflict. Conflicts are never replaced; old or non-selected links must be removed manually.
-- `uv run harness-kit check [--harness claude|pi|codex|all] [--component skills|agents|instructions|statusline]` validates selected content and reports drift without mutating anything.
+- `uv run harness-kit preview [--harness claude|pi|codex|all] [--component NAME]` prints the desired deployment without changing anything.
+- `uv run harness-kit install [--harness claude|pi|codex|all] [--component NAME]` renders selected agents, deploys links, and registers selected Pi packages. Conflicts are never replaced; old or non-selected links must be removed manually.
+- `uv run harness-kit check [--harness claude|pi|codex|all] [--component NAME]` validates selected content and reports drift without mutating anything.
 
-Components are `skills`, `agents`, `instructions`, and `statusline` (Claude only; selecting it for Pi or Codex contributes nothing). `--component` is repeatable; omit it to install every component. Skills-only operations link canonical skill directories directly (without rendering agents or running external harness commands). For example, install shared Pi/Codex skills with `uv run harness-kit install --harness codex --component skills`, or Claude agents and instructions with `uv run harness-kit install --harness claude --component agents --component instructions`.
+Components are `skills`, `agents`, `instructions`, `statusline` (Claude only), and `extensions` (Pi only). `--component` is repeatable; omit it to install every component for the selected harnesses. Skills-only operations link canonical skill directories directly (without rendering agents or running external harness commands). For example, install shared Pi/Codex skills with `uv run harness-kit install --harness codex --component skills`, or Claude agents and instructions with `uv run harness-kit install --harness claude --component agents --component instructions`.
 
 ### Agent installation by harness
 
@@ -48,7 +60,7 @@ The `agents` component uses each harness's supported distribution mechanism:
 | Pi | `.generated/pi/agents/*.md` | Registers this checkout as a Pi package with `pi install`; `package.json` exposes the rendered directory through `pi.subagents.agents` |
 | Codex | `.generated/codex/agents/*.toml` | Links into `$CODEX_HOME/agents/` (default `~/.codex/agents/`) |
 
-Pi package agents remain in this checkout. They are discovered through the package entry in `~/.pi/agent/settings.json`, so installing the Pi `agents` component intentionally does **not** copy or link them into `~/.pi/agent/agents/`. That directory remains available for user-local agents and overrides. Reload an active Pi session after installation.
+Pi package agents remain in this checkout. They are discovered through the package entry in `~/.pi/agent/settings.json` (or `$PI_CODING_AGENT_DIR/settings.json` if set to a directory inside `HOME`), so installing the Pi `agents` component intentionally does **not** copy or link them into `~/.pi/agent/agents/`. That directory remains available for user-local agents and overrides. Reload an active Pi session after installation.
 
 Installation is stateless: it does not record ownership or remove historical state. Existing deployed link destinations are never replaced or removed. Skills are linked individually, allowing them to coexist with other skills; manually clean up links that are no longer desired.
 

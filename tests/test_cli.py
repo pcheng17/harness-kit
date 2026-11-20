@@ -15,6 +15,13 @@ from typing import Iterator
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 REAL_HOME = Path.home().resolve()
+PI_EXTENSIONS = (
+    "npm:pi-subagents",
+    "npm:pi-polish",
+    "npm:@juicesharp/rpiv-ask-user-question",
+    "npm:@juicesharp/rpiv-btw",
+    "npm:@juicesharp/rpiv-todo",
+)
 
 
 @dataclass(frozen=True)
@@ -83,7 +90,7 @@ def temporary_sandbox() -> Iterator[Sandbox]:
 _MUTATION_ENVIRONMENT_PATHS = frozenset((
     "HOME", "CODEX_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
     "TMPDIR", "NPM_CONFIG_USERCONFIG", "NPM_CONFIG_CACHE", "NPM_CONFIG_PREFIX", "PI_HOME",
-    "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "HARNESS_LOG", "PATH", "PYTHONPATH",
+    "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "HARNESS_LOG", "PATH", "PYTHONPATH", "PI_CODING_AGENT_DIR",
 ))
 
 
@@ -93,7 +100,7 @@ def subprocess_environment(sandbox: Sandbox, environment_override: dict[str, str
     fake_bin.mkdir(exist_ok=True)
     for name in ("npm", "pi"):
         command = fake_bin / name
-        command.write_text("#!/bin/sh\nprintf '%s|%s %s\\n' \"$PWD\" \"$0\" \"$*\" >> \"$HARNESS_LOG\"\n[ -z \"${HARNESS_SHIM_HOOK:-}\" ] || \"$HARNESS_SHIM_HOOK\" \"$0\"\n")
+        command.write_text("#!/bin/sh\nprintf '%s|%s %s\\n' \"$PWD\" \"$0\" \"$*\" >> \"$HARNESS_LOG\"\n[ -z \"${HARNESS_SHIM_HOOK:-}\" ] || \"$HARNESS_SHIM_HOOK\" \"$0\" \"$@\"\n")
         command.chmod(0o755)
     environment = {
         "HOME": str(sandbox.root / "home"), "CODEX_HOME": str(sandbox.root / "home/codex-home"),
@@ -224,7 +231,7 @@ class HarnessKitTests(unittest.TestCase):
             self.assertTrue(destination.is_symlink(), destination)
             self.assertEqual(destination.resolve(), common)
         commands = (self.path / "commands").read_text().splitlines()
-        self.assertEqual(len(commands), 2)
+        self.assertEqual(len(commands), 1 + len(PI_EXTENSIONS))
         self.assertTrue(all(line.startswith(f"{self.project}|") for line in commands), commands)
         second = invoke(self.sandbox, "install")
         self.assertEqual(second.returncode, 0, second.stderr)
@@ -318,7 +325,7 @@ class HarnessKitTests(unittest.TestCase):
         hook = self.path / "shim-hook"
         hook.write_text(
             "#!/bin/sh\n"
-            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/mkdir -p \"%s\"; /bin/rm -rf \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
+            "if [ \"$1\" = \"%s/bin/pi\" ]; then /bin/mkdir -p \"%s\"; /bin/rm -rf \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
             % (self.path, parent.parent, parent, outside, parent)
         )
         hook.chmod(0o755)
@@ -367,7 +374,7 @@ class HarnessKitTests(unittest.TestCase):
             self.assertEqual(pi.returncode, 0, pi.stderr)
             self.assertFalse((sandbox.root / "home/.agents/AGENTS.md").exists())
             self.assertFalse((sandbox.root / "home/.pi/agent/settings.json").exists())
-            self.assertEqual(len((sandbox.root / "commands").read_text().splitlines()), 2)
+            self.assertEqual(len((sandbox.root / "commands").read_text().splitlines()), 1)
 
     def test_default_pi_install_does_not_create_settings(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "pi")
@@ -467,7 +474,7 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(canary.read_text(), "protected\n")
         self.assertFalse((self.path / "commands").exists())
 
-    def test_install_revalidates_parent_after_npm_race(self) -> None:
+    def test_install_revalidates_parent_after_pi_registration(self) -> None:
         outside = self.path / "outside"
         outside.mkdir()
         canary = outside / "canary"
@@ -477,7 +484,7 @@ class HarnessKitTests(unittest.TestCase):
         hook = self.path / "shim-hook"
         hook.write_text(
             "#!/bin/sh\n"
-            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/rm -rf \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
+            "if [ \"$1\" = \"%s/bin/pi\" ]; then /bin/rm -rf \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
             % (self.path, parent, outside, parent)
         )
         hook.chmod(0o755)
@@ -494,7 +501,7 @@ class HarnessKitTests(unittest.TestCase):
         hook = self.path / "shim-hook"
         hook.write_text(
             "#!/bin/sh\n"
-            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/mkdir -p \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
+            "if [ \"$1\" = \"%s/bin/pi\" ]; then /bin/mkdir -p \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
             % (self.path, destination.parent, foreign, destination)
         )
         hook.chmod(0o755)
@@ -610,9 +617,8 @@ class HarnessKitTests(unittest.TestCase):
         result = invoke(self.sandbox, "install", "--harness", "all", "--component", "agents")
         self.assertEqual(result.returncode, 0, result.stderr)
         commands = (self.path / "commands").read_text().splitlines()
-        self.assertEqual(len(commands), 2)
-        self.assertEqual(sum("/npm " in line for line in commands), 1)
-        self.assertEqual(sum("/pi " in line for line in commands), 1)
+        self.assertEqual(len(commands), 1)
+        self.assertIn(f"pi install {self.project}", commands[0])
         self.assertTrue((self.project / ".generated/codex/agents/scout.toml").is_file())
         self.assertTrue((self.path / "home/codex-home/agents/scout.toml").is_symlink())
 
@@ -732,7 +738,7 @@ class HarnessKitTests(unittest.TestCase):
         hook = self.path / "shim-hook"
         hook.write_text(
             "#!/bin/sh\n"
-            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/rm -rf \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
+            "if [ \"$1\" = \"%s/bin/pi\" ]; then /bin/rm -rf \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
             % (self.path, managed, outside, managed)
         )
         hook.chmod(0o755)
@@ -984,7 +990,7 @@ class HarnessKitTests(unittest.TestCase):
                     self.assertIn(str(self.project / f".generated/{selected}/agents"), result.stdout)
                 for unselected in {"claude", "pi"} - set(rendered):
                     self.assertNotIn(str(self.project / f".generated/{unselected}/agents"), result.stdout)
-                self.assertEqual("[NPM CI]" in result.stdout, includes_pi_work)
+                self.assertNotIn("npm:", result.stdout)
                 self.assertEqual("[PI INSTALL]" in result.stdout, includes_pi_work)
                 self.assertIn(str(self.project), result.stdout)
                 self.assertNotIn(str(SOURCE_ROOT), result.stdout)
@@ -1003,7 +1009,7 @@ class HarnessKitTests(unittest.TestCase):
 
         preview = invoke(self.sandbox, "preview", "--component", "agents")
         self.assertEqual(preview.returncode, 0, preview.stderr)
-        markers = ("[RENDER]", "[NPM CI]", "[PI INSTALL]", "[CREATE]")
+        markers = ("[RENDER]", "[PI INSTALL]", "[CREATE]")
         positions = [preview.stdout.index(marker) for marker in markers]
         self.assertEqual(positions, sorted(positions))
 
@@ -1013,9 +1019,8 @@ class HarnessKitTests(unittest.TestCase):
         self.assertTrue(generated.is_file())
         self.assertTrue(destination.is_symlink())
         commands = (self.path / "commands").read_text().splitlines()
-        self.assertEqual(len(commands), 2)
-        self.assertIn("npm ci", commands[0])
-        self.assertIn("pi install", commands[1])
+        self.assertEqual(len(commands), 1)
+        self.assertIn(f"pi install {self.project}", commands[0])
 
     def test_agent_install_creates_missing_generated_parent(self) -> None:
         generated = self.project / ".generated"
@@ -1040,7 +1045,7 @@ class HarnessKitTests(unittest.TestCase):
     def test_pi_subagent_settings_are_not_managed(self) -> None:
         settings = self.path / "home/.pi/agent/settings.json"
         settings.parent.mkdir(parents=True)
-        original = json.dumps({"packages": [str(self.project)], "subagents": {"disableBuiltins": False}}) + "\n"
+        original = json.dumps({"packages": [{"source": "../../../project"}], "subagents": {"disableBuiltins": False}}) + "\n"
         settings.write_text(original)
 
         preview = invoke(self.sandbox, "preview", "--harness", "pi", "--component", "agents")
@@ -1051,8 +1056,64 @@ class HarnessKitTests(unittest.TestCase):
         installed = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
         self.assertEqual(installed.returncode, 0, installed.stderr)
         self.assertEqual(settings.read_text(), original)
+        self.assertFalse((self.path / "commands").exists())
         checked = invoke(self.sandbox, "check", "--harness", "pi", "--component", "agents")
         self.assertEqual(checked.returncode, 0, checked.stderr)
+
+    def test_pi_extensions_only_preserves_pins_and_installs_only_missing_packages(self) -> None:
+        settings = self.path / "home/.pi/agent/settings.json"
+        settings.parent.mkdir(parents=True)
+        pinned = [
+            "npm:pi-subagents@0.78.0",
+            {"source": "npm:pi-polish@compat", "extensions": []},
+            {"source": "npm: @juicesharp/rpiv-ask-user-question@1.13.0"},
+        ]
+        unrelated = "npm:@juicesharp/rpiv-btw-extra"
+        original = json.dumps({"packages": [*pinned, unrelated], "subagents": {"disableBuiltins": True}})
+        settings.write_text(original)
+        arguments = ("--harness", "pi", "--component", "extensions")
+
+        preview = invoke(self.sandbox, "preview", *arguments)
+        self.assertEqual(preview.returncode, 0, preview.stderr)
+        self.assertEqual(preview.stdout.count("[PI INSTALL]"), 2)
+        self.assertEqual(preview.stdout.count("[NOOP]"), 3)
+        self.assertFalse((self.path / "commands").exists())
+        checked = invoke(self.sandbox, "check", *arguments)
+        self.assertEqual(checked.returncode, 1, checked.stderr)
+        self.assertIn("[PI INSTALL] npm:@juicesharp/rpiv-btw", checked.stdout)
+
+        installed = invoke(self.sandbox, "install", *arguments)
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        commands = (self.path / "commands").read_text().splitlines()
+        self.assertEqual(commands, [f"{self.project}|{self.path}/bin/pi install {source}" for source in PI_EXTENSIONS[3:]])
+        self.assertEqual(settings.read_text(), original)
+        self.assertFalse((self.project / ".generated").exists())
+        self.assertFalse((self.path / "home/.agents").exists())
+
+    def test_pi_extensions_use_overridden_settings_directory(self) -> None:
+        directory = self.path / "home/custom-pi"
+        directory.mkdir(parents=True)
+        settings = directory / "settings.json"
+        settings.write_text(json.dumps({"packages": list(PI_EXTENSIONS)}))
+        arguments = ("--harness", "pi", "--component", "extensions")
+        for command in ("check", "install"):
+            result = invoke(self.sandbox, command, *arguments, environment_override={"PI_CODING_AGENT_DIR": str(directory)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.path / "commands").exists())
+
+    def test_pi_extension_failures_do_not_block_content_or_other_extensions(self) -> None:
+        hook = self.path / "shim-hook"
+        hook.write_text('#!/bin/sh\ncase "$3" in npm:pi-subagents) exit 20 ;; esac\n')
+        hook.chmod(0o755)
+        result = invoke(self.sandbox, "install", "--harness", "pi")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("Pi extension installation failed after content operations", result.stderr)
+        self.assertIn("external command failed (20): pi install npm:pi-subagents", result.stderr)
+        self.assertTrue((self.project / ".generated/pi/agents/scout.md").is_file())
+        self.assertTrue((self.path / "home/.agents/skills/code-review").is_symlink())
+        commands = (self.path / "commands").read_text().splitlines()
+        expected = (str(self.project), *PI_EXTENSIONS)
+        self.assertEqual(commands, [f"{self.project}|{self.path}/bin/pi install {source}" for source in expected])
 
     def test_pi_check_rejects_malformed_json_and_symlink(self) -> None:
         settings = self.path / "home/.pi/agent/settings.json"
@@ -1084,7 +1145,7 @@ class HarnessKitTests(unittest.TestCase):
         installed = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
         self.assertEqual(installed.returncode, 0, installed.stderr)
         commands = (self.path / "commands").read_text()
-        self.assertIn("npm ci", commands)
+        self.assertNotIn("npm ci", commands)
         self.assertIn("pi install", commands)
         self.assertNotIn("pi remove", commands)
 
@@ -1200,7 +1261,7 @@ class HarnessKitTests(unittest.TestCase):
         hook = self.path / "shim-hook"
         hook.write_text(
             "#!/bin/sh\n"
-            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/mkdir -p \"%s\"; /bin/rm -rf \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
+            "if [ \"$1\" = \"%s/bin/pi\" ]; then /bin/mkdir -p \"%s\"; /bin/rm -rf \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
             % (self.path, managed.parent, managed, outside, managed)
         )
         hook.chmod(0o755)
@@ -1220,7 +1281,7 @@ class HarnessKitTests(unittest.TestCase):
         hook = self.path / "shim-hook"
         hook.write_text(
             "#!/bin/sh\n"
-            "if [ \"$1\" = \"%s/bin/npm\" ]; then /bin/mkdir -p \"%s\"; /bin/rm -rf \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
+            "if [ \"$1\" = \"%s/bin/pi\" ]; then /bin/mkdir -p \"%s\"; /bin/rm -rf \"%s\"; /bin/ln -s \"%s\" \"%s\"; fi\n"
             % (self.path, nested.parent, nested, outside, nested)
         )
         hook.chmod(0o755)
@@ -1249,7 +1310,7 @@ class HarnessKitTests(unittest.TestCase):
         installed = invoke(self.sandbox, "install", "--harness", "pi", "--component", "agents")
         self.assertEqual(installed.returncode, 0, installed.stderr)
         commands = (self.path / "commands").read_text()
-        self.assertIn("npm ci", commands)
+        self.assertNotIn("npm ci", commands)
         self.assertIn("pi install", commands)
         self.assertNotIn("pi remove", commands)
 
@@ -1448,7 +1509,7 @@ class HarnessKitTests(unittest.TestCase):
     def test_full_install_check_converges_once_statusline_is_configured(self) -> None:
         self.assertEqual(invoke(self.sandbox, "install").returncode, 0)
         settings = self.path / "home/.pi/agent/settings.json"
-        settings.write_text(json.dumps({"packages": [str(self.project)]}) + "\n")
+        settings.write_text(json.dumps({"packages": [str(self.project), *PI_EXTENSIONS]}) + "\n")
         unconfigured = invoke(self.sandbox, "check")
         self.assertEqual(unconfigured.returncode, 1)
         self.assertIn("hint:", unconfigured.stdout)
