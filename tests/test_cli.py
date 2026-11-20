@@ -161,10 +161,16 @@ class HarnessKitTests(unittest.TestCase):
         policy.write_text(text)
         return policy
 
-    def test_fresh_install_creates_links_without_state(self) -> None:
+    def assert_managed_instructions(self, destination: Path, project: Path | None = None) -> None:
+        source = (project or self.project) / "content/instructions/AGENTS.md"
+        self.assertTrue(destination.is_file(), destination)
+        self.assertFalse(destination.is_symlink(), destination)
+        self.assertIn(source.read_bytes(), destination.read_bytes())
+
+    def test_fresh_install_creates_managed_instructions_without_state(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "claude", "--component", "instructions")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.path / "home/.claude/CLAUDE.md").is_symlink())
+        self.assert_managed_instructions(self.path / "home/.claude/CLAUDE.md")
         self.assertFalse((self.path / "home/.local/state/harness-kit").exists())
 
     def test_malformed_historical_state_is_ignored_and_preserved(self) -> None:
@@ -226,10 +232,8 @@ class HarnessKitTests(unittest.TestCase):
         home = self.path / "home"
         self.assertTrue((home / ".claude/agents/scout.md").is_symlink())
         self.assertTrue((home / ".agents/skills/code-review").is_symlink())
-        common = self.project / "content/instructions/AGENTS.md"
-        for destination in (home / ".claude/CLAUDE.md", home / ".agents/AGENTS.md", home / ".pi/agent/AGENTS.md"):
-            self.assertTrue(destination.is_symlink(), destination)
-            self.assertEqual(destination.resolve(), common)
+        for destination in (home / ".claude/CLAUDE.md", home / ".agents/AGENTS.md", home / ".pi/agent/AGENTS.md", home / "codex-home/AGENTS.md"):
+            self.assert_managed_instructions(destination)
         commands = (self.path / "commands").read_text().splitlines()
         self.assertEqual(len(commands), 1 + len(PI_EXTENSIONS))
         self.assertTrue(all(line.startswith(f"{self.project}|") for line in commands), commands)
@@ -403,13 +407,13 @@ class HarnessKitTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertFalse((sandbox.root / "home/.pi/agent/settings.json").exists())
 
-    def test_instructions_only_installs_only_instruction_links(self) -> None:
+    def test_instructions_only_installs_only_instruction_files(self) -> None:
         result = invoke(self.sandbox, "install", "--component", "instructions")
         self.assertEqual(result.returncode, 0, result.stderr)
         home = self.path / "home"
-        self.assertTrue((home / ".claude/CLAUDE.md").is_symlink())
-        self.assertTrue((home / ".agents/AGENTS.md").is_symlink())
-        self.assertTrue((home / ".pi/agent/AGENTS.md").is_symlink())
+        self.assert_managed_instructions(home / ".claude/CLAUDE.md")
+        self.assert_managed_instructions(home / ".agents/AGENTS.md")
+        self.assert_managed_instructions(home / ".pi/agent/AGENTS.md")
         self.assertFalse((home / ".claude/skills/code-review").exists())
         self.assertFalse((home / ".claude/agents/scout.md").exists())
         self.assertFalse((self.path / "commands").exists())
@@ -419,7 +423,7 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         home = self.path / "home"
         self.assertTrue((home / ".claude/skills/code-review").is_symlink())
-        self.assertTrue((home / ".claude/CLAUDE.md").is_symlink())
+        self.assert_managed_instructions(home / ".claude/CLAUDE.md")
         self.assertFalse((home / ".claude/agents/scout.md").exists())
 
     def test_managed_parent_symlinks_fail_closed_for_every_family(self) -> None:
@@ -569,7 +573,7 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
         agent = self.path / "home/.claude/agents/scout.md"
         self.assertTrue(agent.is_symlink())
-        self.assertTrue((self.path / "home/.claude/CLAUDE.md").is_symlink())
+        self.assert_managed_instructions(self.path / "home/.claude/CLAUDE.md")
 
     def test_codex_agents_render_required_toml_fields(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "agents")
@@ -844,21 +848,21 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
         claude_agent = self.path / "home/.claude/agents/scout.md"
         self.assertTrue(claude_agent.is_symlink())
-        self.assertEqual((self.path / "home/.claude/CLAUDE.md").resolve(), self.project / "content/instructions/AGENTS.md")
+        self.assert_managed_instructions(self.path / "home/.claude/CLAUDE.md")
 
     def test_scoped_install_deploys_only_requested_common_locations(self) -> None:
         claude = invoke(self.sandbox, "install", "--harness", "claude")
         self.assertEqual(claude.returncode, 0, claude.stderr)
         home = self.path / "home"
-        self.assertTrue((home / ".claude/CLAUDE.md").is_symlink())
+        self.assert_managed_instructions(home / ".claude/CLAUDE.md")
         self.assertFalse((home / ".agents/AGENTS.md").exists())
         self.assertFalse((home / ".pi/agent/AGENTS.md").exists())
         with temporary_sandbox() as sandbox:
             pi = invoke(sandbox, "install", "--harness", "pi")
             self.assertEqual(pi.returncode, 0, pi.stderr)
             self.assertFalse((sandbox.root / "home/.claude/CLAUDE.md").exists())
-            self.assertTrue((sandbox.root / "home/.agents/AGENTS.md").is_symlink())
-            self.assertTrue((sandbox.root / "home/.pi/agent/AGENTS.md").is_symlink())
+            self.assert_managed_instructions(sandbox.root / "home/.agents/AGENTS.md", sandbox.project)
+            self.assert_managed_instructions(sandbox.root / "home/.pi/agent/AGENTS.md", sandbox.project)
 
     def test_matching_link_is_stateless_noop(self) -> None:
         destination = self.path / "home/.agents/AGENTS.md"
@@ -1149,25 +1153,24 @@ class HarnessKitTests(unittest.TestCase):
         self.assertIn("pi install", commands)
         self.assertNotIn("pi remove", commands)
 
-    def test_codex_instructions_only_links_common_agents_file(self) -> None:
+    def test_codex_instructions_only_writes_common_agents_file(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions")
         self.assertEqual(result.returncode, 0, result.stderr)
         destination = self.path / "home/codex-home/AGENTS.md"
-        self.assertTrue(destination.is_symlink())
-        self.assertEqual(destination.resolve(), self.project / "content/instructions/AGENTS.md")
+        self.assert_managed_instructions(destination)
         self.assertFalse((self.project / ".generated").exists())
         self.assertFalse((self.path / "commands").exists())
 
     def test_codex_instructions_use_default_codex_home(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions", environment_override={"CODEX_HOME": None})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.path / "home/.codex/AGENTS.md").is_symlink())
+        self.assert_managed_instructions(self.path / "home/.codex/AGENTS.md")
 
     def test_codex_instructions_respect_safe_codex_home_override(self) -> None:
         override = self.path / "home/custom-codex"
         result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions", environment_override={"CODEX_HOME": str(override)})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((override / "AGENTS.md").is_symlink())
+        self.assert_managed_instructions(override / "AGENTS.md")
 
     def test_codex_instructions_reject_unsafe_codex_home(self) -> None:
         result = invoke(self.sandbox, "install", "--harness", "codex", "--component", "instructions", environment_override={"CODEX_HOME": str(self.path / "outside") + "/../home/codex"})

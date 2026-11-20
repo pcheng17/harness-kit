@@ -16,6 +16,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 GENERATED = ROOT / ".generated"
 COMMON_INSTRUCTIONS = ROOT / "content/instructions/AGENTS.md"
+INSTRUCTIONS_START = b"<!-- BEGIN HARNESS KIT INSTRUCTIONS -->"
+INSTRUCTIONS_END = b"<!-- END HARNESS KIT INSTRUCTIONS -->"
 CLAUDE_STATUSLINE = ROOT / "content/claude/statusline.sh"
 STATUSLINE_COMMAND = "~/.claude/statusline.sh"
 STATUSLINE_HINT = (
@@ -58,11 +60,18 @@ class Link:
 
 
 @dataclass(frozen=True)
+class InstructionWrite:
+    destination: Path
+    content: bytes
+
+
+@dataclass(frozen=True)
 class Operation:
     action: str
     detail: str = ""
     link: Link | None = None
     source: str | None = None
+    instruction: InstructionWrite | None = None
 
 
 def home() -> Path:
@@ -366,17 +375,12 @@ def desired_links(harness: str, agents: list[Agent], components: frozenset[str])
     user_home = home()
     links: list[Link] = []
     if harness in ("all", "codex"):
-        if "instructions" in components:
-            destination_root = codex_home()
-            links.append(Link(destination_root / "AGENTS.md", COMMON_INSTRUCTIONS))
         if "agents" in components:
             destination_root = codex_home() / "agents"
             for agent in agents:
                 agent_file = GENERATED / "codex/agents" / f"{agent.name}.toml"
                 links.append(Link(destination_root / agent_file.name, agent_file))
     if harness in ("all", "claude"):
-        if "instructions" in components:
-            links.append(Link(user_home / ".claude/CLAUDE.md", COMMON_INSTRUCTIONS))
         if "agents" in components:
             for agent in agents:
                 agent_file = GENERATED / "claude/agents" / f"{agent.name}.md"
@@ -391,12 +395,6 @@ def desired_links(harness: str, agents: list[Agent], components: frozenset[str])
         # Pi and Codex intentionally consume the same user-level skill links.
         if "skills" in components:
             links.extend(shared_skill_links(user_home))
-    if harness in ("all", "pi"):
-        if "instructions" in components:
-            links.extend((
-                Link(user_home / ".agents/AGENTS.md", COMMON_INSTRUCTIONS),
-                Link(user_home / ".pi/agent/AGENTS.md", COMMON_INSTRUCTIONS),
-            ))
     return links
 
 
@@ -451,6 +449,51 @@ def link_operations(harness: str, agents: list[Agent], components: frozenset[str
         else:
             operations.append(Operation("conflict", "destination target differs", link))
     return operations
+
+
+def instruction_destinations(harness: str) -> list[Path]:
+    user_home = home()
+    destinations: list[Path] = []
+    if harness in ("all", "codex"):
+        destinations.append(codex_home() / "AGENTS.md")
+    if harness in ("all", "claude"):
+        destinations.append(user_home / ".claude/CLAUDE.md")
+    if harness in ("all", "pi"):
+        destinations.extend((user_home / ".agents/AGENTS.md", user_home / ".pi/agent/AGENTS.md"))
+    return list(dict.fromkeys(destinations))
+
+
+def instruction_operations(harness: str) -> list[Operation]:
+    source = COMMON_INSTRUCTIONS.read_bytes()
+    section = INSTRUCTIONS_START + b"\n" + source + (b"" if source.endswith(b"\n") else b"\n") + INSTRUCTIONS_END + b"\n"
+    operations: list[Operation] = []
+    for path in instruction_destinations(harness):
+        validate_managed_ancestors(path)
+        if path.is_symlink():
+            action = "noop" if link_target(path) == COMMON_INSTRUCTIONS.resolve() else "conflict"
+        elif not path.exists():
+            action = "create"
+        elif path.is_file() and path.read_bytes() == section and path != COMMON_INSTRUCTIONS.resolve():
+            action = "noop"
+        else:
+            action = "conflict"
+        detail = "destination differs" if action == "conflict" else ""
+        operations.append(Operation(action, detail, instruction=InstructionWrite(path, section)))
+    return operations
+
+
+def create_instruction_file(write: InstructionWrite) -> None:
+    path = write.destination
+    validate_managed_ancestors(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    validate_managed_ancestors(path)
+    try:
+        with path.open("xb") as stream:
+            stream.write(write.content)
+    except FileExistsError as error:
+        raise KitError(f"refusing to replace substituted destination: {path}") from error
+    except OSError as error:
+        raise KitError(f"could not write instructions at {path}: {error}") from error
 
 
 def read_pi_settings(path: Path) -> dict[str, Any]:
@@ -545,6 +588,8 @@ def install_plan(harness: str, agents: list[Agent], components: frozenset[str]) 
         generated_paths = [GENERATED / selected / "agents" for selected in HARNESSES if harness in ("all", selected)]
         operations.append(Operation("render", f"generate selected agent trees at {', '.join(map(str, generated_paths))}"))
     operations.extend(pi_content)
+    if "instructions" in components:
+        operations.extend(instruction_operations(harness))
     operations.extend(link_operations(harness, agents, components))
     operations.extend(pi_extensions)
     return operations
@@ -556,6 +601,8 @@ def print_plan(operations: list[Operation]) -> None:
         action = f"[{operation.action.upper()}]"
         if operation.link is not None:
             print(f"{action:12} {operation.link.destination} -> {operation.link.target}{suffix}")
+        elif operation.instruction is not None:
+            print(f"{action:12} {operation.instruction.destination}{suffix}")
         elif operation.source is not None:
             print(f"{action:12} {operation.source}{suffix}")
         else:
@@ -615,6 +662,8 @@ def install(harness: str, components: frozenset[str]) -> int:
                 if operation.source not in PI_EXTENSIONS:
                     raise
                 extension_failures.append(str(error))
+        elif operation.action == "create" and operation.instruction is not None:
+            create_instruction_file(operation.instruction)
         elif operation.action == "create":
             validate_operation_preconditions(operation)
             assert operation.link is not None
