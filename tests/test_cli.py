@@ -1249,6 +1249,41 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(destination.resolve(), foreign)
 
+    def test_ambiguous_instruction_markers_block_all_mutations(self) -> None:
+        destination = self.path / "home/.claude/CLAUDE.md"
+        destination.parent.mkdir(parents=True)
+        begin = b"<!-- BEGIN HARNESS KIT INSTRUCTIONS -->\n"
+        end = b"<!-- END HARNESS KIT INSTRUCTIONS -->\n"
+        scope = ("--harness", "all", "--component", "instructions")
+        for malformed in (begin, end, begin + begin + end + end, (begin + end) * 2):
+            with self.subTest(content=malformed):
+                destination.write_bytes(malformed)
+                for command in ("preview", "check", "install"):
+                    result = invoke(self.sandbox, command, *scope)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("[CONFLICT]", result.stdout)
+                    self.assertIn(str(destination), result.stdout)
+                self.assertEqual(destination.read_bytes(), malformed)
+                self.assertFalse((self.path / "home/codex-home").exists())
+
+    def test_unsafe_instruction_destinations_are_preserved(self) -> None:
+        destination = self.path / "home/codex-home/AGENTS.md"
+        destination.parent.mkdir(parents=True)
+        destination.mkdir()
+        scope = ("--harness", "codex", "--component", "instructions")
+        result = invoke(self.sandbox, "install", *scope)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("not a regular instruction file", result.stdout)
+        self.assertTrue(destination.is_dir())
+        destination.rmdir()
+        target = self.path / "missing"
+        destination.symlink_to(target)
+        result = invoke(self.sandbox, "install", *scope)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("[CONFLICT]", result.stdout)
+        self.assertEqual(os.readlink(destination), str(target))
+        self.assertFalse(target.exists())
+
     def test_codex_instruction_parent_symlink_and_file_fail_closed(self) -> None:
         outside = self.path / "outside"
         outside.mkdir()
@@ -1282,6 +1317,17 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.count("codex-home/AGENTS.md"), 1)
 
+    def test_all_deduplicates_overlapping_codex_and_pi_instructions(self) -> None:
+        home = self.path / "home"
+        scope = ("--harness", "all", "--component", "instructions")
+        env = {"CODEX_HOME": str(home / ".agents")}
+        result = invoke(self.sandbox, "preview", *scope, environment_override=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.count(str(home / ".agents/AGENTS.md")), 1)
+        result = invoke(self.sandbox, "install", *scope, environment_override=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_managed_instructions(home / ".agents/AGENTS.md")
+
     def test_missing_common_instructions_blocks_codex_install_before_mutation(self) -> None:
         source = self.project / "content/instructions/AGENTS.md"
         source.unlink()
@@ -1289,7 +1335,24 @@ class HarnessKitTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertFalse((self.path / "home").exists())
 
-    def test_codex_instruction_create_is_revalidated_before_linking(self) -> None:
+    def test_install_refuses_to_discard_instruction_edits_made_after_planning(self) -> None:
+        destination = self.path / "home/codex-home/AGENTS.md"
+        destination.parent.mkdir(parents=True)
+        destination.write_text("original instructions\n")
+        hook = self.path / "shim-hook"
+        hook.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"%s/bin/pi\" ]; then printf 'new instructions\\n' > \"%s\"; fi\n"
+            % (self.path, destination)
+        )
+        hook.chmod(0o755)
+        result = invoke(self.sandbox, "install", "--harness", "all", "--component", "agents", "--component", "instructions")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("substituted destination", result.stderr)
+        self.assertEqual(destination.read_text(), "new instructions\n")
+        self.assertEqual(list(destination.parent.iterdir()), [destination])
+
+    def test_codex_instruction_create_revalidates_ancestors_before_writing(self) -> None:
         outside = self.path / "outside"
         outside.mkdir()
         canary = outside / "canary"
