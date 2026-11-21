@@ -11,6 +11,11 @@
 - Keep the parent agent responsible for coordination, synthesis, final verification, and communicating results.
 - Do not delegate trivial tasks where the overhead would outweigh the benefit.
 
+## Worktrees
+
+- When you need a worktree (a skill asks for one or I do), take it with the `worktree-slots` skill rather than any built-in worktree tool, and park it with `wt.sh park` when you stop working in it.
+- When a repo's `AGENTS.md` prescribes a different worktree recipe, follow the repo.
+
 ## Work Queue
 
 - Treat all work as a FIFO queue of todos, and finish the item in hand before starting the next.
