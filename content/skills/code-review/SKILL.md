@@ -112,7 +112,8 @@ If the spec is missing, skip the Spec sub-agent and note this in the final repor
 
 **Correctness sub-agent prompt** - include:
 
-- The brief: "Find bugs the diff introduces: wrong logic, off-by-one, unhandled errors or nil/empty cases, races, resource leaks, broken callers, security holes. For each, give a concrete failure scenario - the input or state, and the wrong result or crash it produces. Report only defects with such a scenario; leave style and spec fidelity to the other reviewers."
+- The path or fetched contents of the spec, if any, as the source of the guarantees to break.
+- The brief: "Find bugs the diff introduces: wrong logic, off-by-one, unhandled errors or nil/empty cases, races, resource leaks, broken callers, security holes. For each, give a concrete failure scenario - the input or state, and the wrong result or crash it produces. For each guarantee the spec makes about failure, run code that tries to break it, including bad configuration and work left running after success or failure. Report only defects with such a scenario; leave style and spec fidelity to the other reviewers."
 
 **Verification sub-agent** - only when the addendum has a Verification section. Include:
 
