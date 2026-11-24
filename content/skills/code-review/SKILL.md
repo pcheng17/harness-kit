@@ -95,6 +95,7 @@ Every reviewer brief also carries these shared rules:
 
 - The existing PR/MR review threads from step 2, if any, with: "Skip any point these threads already raise."
 - The addendum's Reviewer brief, if any.
+- The **scratch rule**: "Work in your own `mktemp -d`, and never write into a directory you didn't create."
 - "Cite every finding's location as `path:line`; a requirement missing from the code cites its spec line instead, and mechanical-check lines stay as-is. Rank findings most severe first. Stay under <word cap> words; if the cap forces you to drop findings, end with how many lower-severity ones you left out." (Fill in the word cap from step 1.)
 
 **Standards sub-agent prompt** - include:
@@ -124,7 +125,7 @@ If the spec is missing, skip the Spec sub-agent and note this in the final repor
 
 Spawn one fresh verifier per axis that returned findings, all in the same turn. Give each the diff command, the untracked-file list, that axis's sources (the spec for Spec, the standards files for Standards), and the axis's findings - not the reviewer's reasoning beyond each finding itself. Standards findings that are judgement calls and mechanical-check lines go through unverified; send only the rest.
 
-The brief: "Try to disprove each finding against the actual code: read the cited lines and whatever they depend on. Return a verdict per finding: **confirmed** (you could not disprove it), **refuted** (quote the code that disproves it), or **unclear** (say what you couldn't settle). Stay under <word cap> words." (The same cap as the reviewers.)
+The brief: step 4's scratch rule, then "Try to disprove each finding against the actual code: read the cited lines and whatever they depend on. Return a verdict per finding: **confirmed** (you could not disprove it), **refuted** (quote the code that disproves it), or **unclear** (say what you couldn't settle). Stay under <word cap> words." (The same cap as the reviewers.)
 
 Verification is done when every sent finding has a verdict. Drop refuted findings, mark unclear ones as **disputed**, and keep confirmed ones as reported.
 
