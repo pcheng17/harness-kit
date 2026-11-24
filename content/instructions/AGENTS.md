@@ -1,7 +1,7 @@
 # Global Agent Instructions
 
 - Never use em dashes. Always use hyphens instead.
-- Scratch scripts start with `set -euo pipefail`.
+- Scratch scripts start with `set -euo pipefail`. Inline shell commands can ignore it, so chain `mktemp` and `cd` to what follows with `&&`.
 
 ## Subagent Preference
 
