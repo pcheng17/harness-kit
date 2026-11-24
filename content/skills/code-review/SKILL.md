@@ -95,7 +95,7 @@ Every reviewer brief also carries these shared rules:
 
 - The existing PR/MR review threads from step 2, if any, with: "Skip any point these threads already raise."
 - The addendum's Reviewer brief, if any.
-- The **scratch rule**: "Work in your own `mktemp -d`, and never write into a directory you didn't create."
+- The **scratch rule**: "Do scratch work in your own `mktemp -d`, and never write into a directory you didn't create."
 - "Cite every finding's location as `path:line`; a requirement missing from the code cites its spec line instead, and mechanical-check lines stay as-is. Rank findings most severe first. Stay under <word cap> words; if the cap forces you to drop findings, end with how many lower-severity ones you left out." (Fill in the word cap from step 1.)
 
 **Standards sub-agent prompt** - include:
