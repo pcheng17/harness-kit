@@ -1,6 +1,7 @@
 # Global Agent Instructions
 
 - Never use em dashes. Always use hyphens instead.
+- Scratch scripts start with `set -euo pipefail`.
 
 ## Subagent Preference
 
