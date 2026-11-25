@@ -11,11 +11,13 @@ Three-axis review of the diff between the working state and a fixed point:
 
 Each axis runs as a **parallel sub-agent** so they don't pollute each other's context, a fresh verifier then tries to refute each axis's findings, and this skill aggregates what survives. Start every sub-agent, reviewers and verifiers alike, with a fresh context window rather than a fork of this conversation: a fork would hand it the author's account of the work. A repo can add a **verification gate** (build, tests, coverage) through its review addendum; see step 3.
 
+Your **caller** is whoever gave you this work: the user, or the agent that briefed you. If you can't ask them mid-task, end your turn with the question.
+
 ## Process
 
 ### 1. Pin the fixed point
 
-Run `git fetch` first so remote refs are current, then resolve the fixed point from what the user said:
+Run `git fetch` first so remote refs are current, then resolve the fixed point from what your caller said:
 
 - **A ref** (commit SHA, branch, tag, `main`, `HEAD~5`) - use it as given.
 - **A PR/MR** (number or link) - look up its base branch, head branch, and body (`gh pr view <n> --json baseRefName,headRefName,body` on GitHub). The fixed point is `origin/<base>`; if the current branch isn't the head branch, check it out first (`gh pr checkout <n>`), stopping if the working tree has uncommitted changes.
@@ -36,10 +38,10 @@ Set the **word cap** from the diff's size (`--shortstat` on the chosen diff comm
 
 Look for the originating spec, in this order:
 
-1. Issue references in the commit messages or PR body (`#123`, `Closes #45`, GitLab `!67`, Linear `ENG-123`, etc.) - fetch via the workflow in `docs/agents/issue-tracker.md`. If that file is missing, tell the user to run `/setup-pcheng-skills` and carry on down this list.
-2. A path the user passed as an argument.
+1. Issue references in the commit messages or PR body (`#123`, `Closes #45`, GitLab `!67`, Linear `ENG-123`, etc.) - fetch via the workflow in `docs/agents/issue-tracker.md`. If that file is missing, tell your caller that the user needs to run `/setup-pcheng-skills`, and carry on down this list.
+2. A path your caller passed as an argument.
 3. A spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
-4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
+4. If nothing is found, ask your caller where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
 
 When step 1 resolved a PR/MR (named or defaulted), also fetch its existing review threads, resolved and unresolved, with the mechanics in `../address-pr-comments/REVIEW-THREADS.md` (relative to this skill's folder); resolve the host it needs as step 0 of `../address-pr-comments/SKILL.md` does. Every reviewer brief gets them, so points reviewers already raised are not reported again.
 
